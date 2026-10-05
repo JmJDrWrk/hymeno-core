@@ -3,6 +3,7 @@ verbs in skills.VERBS, using the same model server. The model chooses what to
 do; the verbs decide how. A plan with anything else is rejected."""
 
 import json
+import re
 
 from .skills import VERBS
 
@@ -35,15 +36,21 @@ def describe_verbs():
     return "\n".join(lines)
 
 
+def verb_name(written):
+    """The verb as the model wrote it, tidied: "stop()", " Stop " -> "stop"."""
+    match = re.match(r"^\s*([A-Za-z_]+)\s*(\(.*\))?\s*$", str(written))
+    return match.group(1).lower() if match else ""
+
+
 def validate(plan):
     """Raises ValueError unless every step is a known verb with valid arguments."""
     if not isinstance(plan, list):
         raise ValueError("the plan is not a list")
     steps = []
     for step in plan:
-        if not isinstance(step, dict) or step.get("verb") not in VERBS:
+        verb = verb_name(step.get("verb")) if isinstance(step, dict) else ""
+        if verb not in VERBS:
             raise ValueError("unknown step: %r" % (step,))
-        verb = step["verb"]
         args = step.get("args") or {}
         allowed, _ = VERBS[verb]
         for name, value in args.items():

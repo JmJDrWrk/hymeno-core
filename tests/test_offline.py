@@ -133,6 +133,11 @@ class PlannerTest(unittest.TestCase):
         steps, sentence, _ = planner.plan(model, "busca el ventilador girando solo")
         self.assertEqual([v for v, _ in steps], ["search", "face"])
 
+    def test_verb_written_with_brackets_is_accepted(self):
+        model = FakeModel(plan={"plan": [{"verb": "stop()", "args": {}}, {"verb": " Greet ", "args": {}}]})
+        steps, _, _ = planner.plan(model, "para")
+        self.assertEqual([v for v, _ in steps], ["stop", "greet"])
+
     def test_unknown_verb_is_rejected(self):
         model = FakeModel(plan={"plan": [{"verb": "jump", "args": {}}]})
         with self.assertRaises(ValueError):
