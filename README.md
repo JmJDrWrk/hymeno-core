@@ -24,18 +24,30 @@ This project does the same to a spider robot: a separate mind, attached from
 outside, deciding what the body does. Hence *hymeno*, and *core* because it is
 the decision-making core of that mind.
 
-## What it does now
+## What it does
 
-Phase 1, *face the target*: it looks for a target on the floor (a square of
-yellow electrical tape, where a charging station will go) and turns the robot
-towards it in small steps until it is centred. It does not walk towards it yet.
+You give it orders in plain words, in any language: "find the fan, only
+turning", "face the yellow square and walk up to it". The model turns each
+order into a short plan made only of the verbs the brain knows, and the brain
+carries it out: looking, moving a little, looking again.
 
-Every cycle:
+The verbs are generic; what to look for is always an argument in words, never
+a setting:
 
-1. takes a photo from the robot's head camera,
-2. asks a vision model (Qwen-VL through Ollama) where the target is,
-3. if the target is off to one side, turns a little towards it, stops, and
-   looks again; if it is centred or not in sight, waits.
+| Verb | What it does |
+|------|--------------|
+| `look(target)` | Is it in sight, and where? |
+| `turn(direction, amount)` | Turn on the spot, left or right, small/medium/large. |
+| `forward(amount)` | Walk forward a little. |
+| `stop()` | Stop. |
+| `greet()` | Wave hello. |
+| `search(target, only_turning)` | Turn (and maybe step forward) until it is in sight. |
+| `face(target)` | Turn until it is straight ahead. |
+| `approach(target)` | Walk to it, keeping it centred, and stop when it is close. |
+
+The model decides *what* to do; the verbs decide *how*, with plain geometry
+(how far off centre the target is, how big it looks). A plan that uses
+anything else is rejected.
 
 ## How it fits together
 
@@ -90,24 +102,35 @@ will do.
    cp config.example.yaml config.yaml   # then edit the addresses
    ```
 
-3. Run it:
+3. Run it and give it orders:
 
-   ```bash
-   python -m hymeno --dry-run   # looks and decides, but does not move the robot
-   python -m hymeno             # moves the robot
-   python -m hymeno --once      # one look, then exit
+   ```
+   $ python -m hymeno
+   hymeno> busca el ventilador girando solo
+     -> search(target='an electric fan', only_turning=True)
+        done: found an electric fan at the right (18% of the width)
+     -> face(target='an electric fan')
+        done: facing an electric fan
+   hymeno> /look a yellow square on the floor     # one verb, without the planner
+   hymeno> /help
    ```
 
-Each look is printed and appended to `data/journal.jsonl`.
+   `python -m hymeno --dry-run` looks and plans but never moves the robot;
+   `python -m hymeno "an order"` runs one order and exits. Ctrl+C stops the
+   robot and the current order (and exits at the prompt).
+
+Every look and move is appended to `data/journal.jsonl`.
 
 ## Roadmap
 
-1. Face the target (now).
-2. Walk up to it and stop, using the size of its box as distance.
-3. Search for it by turning when it is not in sight.
-4. Robot side: manual commands take priority, and a switch to allow the brain.
-5. A fast colour tracker (OpenCV) between model calls; the model only confirms.
-6. Memory: a journal of what it saw and did, and things taught by showing them.
+1. Orders in plain words, planned into a few generic verbs (now).
+2. Robot side: manual commands take priority, and a switch to allow the brain.
+3. Measure the body: how many turning steps make a full turn, how big things
+   look at a known distance; remembered, not configured.
+4. Orders from the robot's control page or a chat, and progress shown there.
+5. A fast tracker (OpenCV colour, then YOLO) between model calls; the model
+   confirms what it is.
+6. Memory: things taught by showing them, where things were last seen.
 7. Docker: the brain and the model server in one `docker compose`.
 
 ## License

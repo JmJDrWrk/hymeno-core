@@ -1,4 +1,5 @@
 # Copy this file to config.yaml and adjust it. config.yaml is not committed.
+# Only where things are and the safety limits: what to do comes as orders.
 
 body:
   url: http://robot.local            # the robot's control API
@@ -12,22 +13,8 @@ model:
   name: qwen2.5vl:7b                 # qwen3-vl models work too (their boxes come on a 0-1000 scale)
   timeout_s: 60                      # the first answer also loads the model
   keep_alive: 15m                    # how long Ollama keeps the model loaded
-  max_answer_tokens: 100             # short answers are what make it fast
+  max_answer_tokens: 100             # short answers are what make looking fast
 
-target:
-  label: dock
-  prompt: >-
-    Locate the docking mark only if present: a square outlined with yellow
-    electrical tape on the floor (seen from a low angle it looks like a
-    flattened yellow trapezoid). Answer only with JSON: a list of
-    {"label": "dock", "bbox_2d": [x1, y1, x2, y2]}. If there is none, answer [].
+max_speed: 0.6                       # no walk or turn command above this (0-1)
 
-behavior:
-  center_tolerance: 0.12             # target centred: within this share of the picture width from the middle
-  turn_speed: 0.5                    # turn command for one step, 0-1
-  turn_ms: 500                       # length of one turning step
-  settle_ms: 400                     # wait after a step, so the next photo is sharp
-  idle_s: 1.0                        # wait between looks when there is nothing to do
-  max_speed: 0.6                     # no command above this, whatever the settings above say
-
-data_dir: data                       # journal of every look
+data_dir: data                       # journal of every look and move

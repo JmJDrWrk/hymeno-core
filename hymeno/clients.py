@@ -45,6 +45,10 @@ class Body:
     def stop(self):
         self._post("/api/v1/stop")
 
+    def action(self, name):
+        """One of the robot's tricks, e.g. "hello"."""
+        self._post("/api/v1/action", {"action": name})
+
     def move(self, vx=0.0, vy=0.0, w=0.0, duration_s=0.5):
         """Walks with (vx forward, vy left, w turn left) for duration_s, then stops."""
         limit = self.max_speed
@@ -70,16 +74,29 @@ class VisionModel:
         self.keep_alive = keep_alive
         self.max_answer_tokens = max_answer_tokens
 
-    def ask(self, jpeg, prompt):
-        """Returns (answer text, seconds taken)."""
+    def _generate(self, prompt, images=None, json_only=False, max_tokens=None):
         started = time.monotonic()
-        r = requests.post(self.url + "/api/generate", json={
+        request = {
             "model": self.name,
             "prompt": prompt,
-            "images": [base64.b64encode(jpeg).decode()],
             "stream": False,
             "keep_alive": self.keep_alive,
-            "options": {"temperature": 0, "num_predict": self.max_answer_tokens},
-        }, timeout=self.timeout_s)
+            "options": {"temperature": 0, "num_predict": max_tokens or self.max_answer_tokens},
+        }
+        if images:
+            request["images"] = [base64.b64encode(i).decode() for i in images]
+        if json_only:
+            request["format"] = "json"
+        r = requests.post(self.url + "/api/generate", json=request, timeout=self.timeout_s)
         r.raise_for_status()
         return r.json().get("response", ""), time.monotonic() - started
+
+    def ask(self, jpeg, prompt):
+        """A question about a photo. Returns (answer text, seconds taken)."""
+        return self._generate(prompt, images=[jpeg])
+
+    PLAN_TOKENS = 400
+
+    def ask_text(self, prompt, json_only=False):
+        """A question without a photo (planning). Returns (answer text, seconds taken)."""
+        return self._generate(prompt, json_only=json_only, max_tokens=self.PLAN_TOKENS)
