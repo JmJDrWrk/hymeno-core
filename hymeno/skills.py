@@ -416,7 +416,7 @@ class Skills:
         left, centre, right = columns[:third], columns[third:len(columns) - third], columns[len(columns) - third:]
         return min(centre), sum(left) / len(left), sum(right) / len(right)
 
-    def wander(self):
+    def wander(self, until=None):
         """Walks wherever there is room, without a goal: straight on while the
         way is clear, drifting towards the roomier side, and turning on the
         spot towards it when something is close ahead. Stops after
@@ -428,6 +428,8 @@ class Skills:
         turning, turn_started = 0, 0.0     # turning: +1 left, -1 right, 0 walking
         try:
             while time.monotonic() - started < WANDER_MAX_S:
+                if until is not None and until():
+                    return Result(True, "stopped wandering")
                 tick = time.monotonic()
                 ahead, left, right = self.room()
                 if turning and ahead >= WANDER_GO_M:
@@ -452,6 +454,28 @@ class Skills:
             return Result(True, "wandered for %d s" % WANDER_MAX_S)
         finally:
             self.stop()
+
+    def seek(self, target):
+        """Wanders until the target is in sight, then reaches it."""
+        seen, done = threading.Event(), threading.Event()
+
+        def eyes():
+            while not done.is_set() and not seen.is_set():
+                try:
+                    if self.find(target) is not None:
+                        seen.set()
+                except Exception:
+                    time.sleep(1.0)
+
+        threading.Thread(target=eyes, daemon=True).start()
+        try:
+            result = self.wander(until=seen.is_set)
+        finally:
+            done.set()
+        if not seen.is_set():
+            return Result(False, "%s not found while wandering (%s)" % (target, result.message))
+        self.say("    %s in sight, going to it" % target)
+        return self.reach(target)
 
     def approach(self, target):
         """Walks towards the target, keeping it centred, and stops when it is close."""
@@ -510,4 +534,5 @@ VERBS = {
     "reach": ({"target": TARGET}, "Walk to the target without stopping, steering as it goes, and stop close "
                                   "to it or if the way is blocked. Searches by turning if it is not in sight."),
     "wander": ({}, "Walk around wherever there is room, without a goal, avoiding obstacles."),
+    "seek": ({"target": TARGET}, "Walk around avoiding obstacles until the target is in sight, then walk to it."),
 }

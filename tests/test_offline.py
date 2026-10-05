@@ -436,6 +436,25 @@ class WanderTest(unittest.TestCase):
         self.assertIn("boxed in", result.message)
 
 
+class SeekTest(unittest.TestCase):
+    setUp, tearDown = WanderTest.setUp, WanderTest.tearDown
+
+    def test_wanders_until_seen_then_reaches(self):
+        self.module.WANDER_MAX_S = 5
+        s, body = skills([CENTRE, NEAR])
+        s.depth = FakeDepth([])
+        result = s.seek("a rectangle of yellow tape")
+        self.assertTrue(result.ok)
+        self.assertIn("reached", result.message)
+
+    def test_fails_when_never_seen(self):
+        self.module.WANDER_MAX_S = 0.1
+        s, body = skills([])
+        s.depth = FakeDepth([])
+        self.assertFalse(s.seek("a rectangle of yellow tape").ok)
+        self.assertTrue(body.drives)                    # it walked around looking
+
+
 class ColumnClearancesTest(unittest.TestCase):
     def test_columns_take_the_nearest_part_of_the_horizon_band(self):
         try:
