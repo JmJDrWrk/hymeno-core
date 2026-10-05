@@ -16,6 +16,9 @@ COLUMNS = 7
 # which is near but walkable; higher rows show what is above the robot.
 BAND = (0.35, 0.70)
 NEAREST_PERCENTILE = 10   # a column is as near as its nearest tenth, so thin legs still count
+# Share of the photo's width and height kept around its centre: a wide-angle
+# lens bends the edges, where the depth model (trained on normal lenses) errs.
+CROP = 0.6
 
 
 def column_clearances(depth, columns=COLUMNS, band=BAND, percentile=NEAREST_PERCENTILE):
@@ -38,7 +41,11 @@ class DepthEyes:
     def depth(self, jpeg):
         """The depth map in metres, as a 2D numpy array."""
         with Image.open(io.BytesIO(jpeg)) as image:
-            predicted = self.pipe(image.convert("RGB"))["predicted_depth"]
+            width, height = image.size
+            margin_x, margin_y = width * (1 - CROP) / 2, height * (1 - CROP) / 2
+            centre = image.convert("RGB").crop((int(margin_x), int(margin_y),
+                                                int(width - margin_x), int(height - margin_y)))
+            predicted = self.pipe(centre)["predicted_depth"]
         return predicted.squeeze().float().cpu().numpy()
 
     def clearances(self, jpeg):
