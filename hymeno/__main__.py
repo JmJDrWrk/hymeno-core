@@ -16,6 +16,11 @@ import argparse
 import sys
 import time
 
+try:
+    import readline  # noqa: F401  line editing that erases whole characters, and history with the arrows
+except ImportError:
+    pass
+
 from . import __version__, config, planner
 from .clients import Body, Head, VisionModel
 from .journal import Journal
@@ -45,6 +50,12 @@ def run_order(skills, model, order):
         if not run_step(skills, verb, args).ok:
             break
     skills.stop()
+
+
+def clean(line):
+    """Drops half characters: without line editing, erasing an accented letter
+    in the terminal can leave one of its bytes behind."""
+    return line.encode("utf-8", "surrogateescape").decode("utf-8", "ignore").strip()
 
 
 def direct(line):
@@ -116,7 +127,7 @@ def main():
     orders = [" ".join(args.order)] if args.order else None
     while True:
         try:
-            line = orders.pop(0) if orders else input("hymeno> ").strip()
+            line = clean(orders.pop(0) if orders else input("hymeno> "))
         except (EOFError, KeyboardInterrupt):
             print()
             break

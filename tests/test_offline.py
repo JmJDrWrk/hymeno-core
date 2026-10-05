@@ -261,6 +261,11 @@ class DirectTest(unittest.TestCase):
         from hymeno.__main__ import direct
         self.assertEqual(direct("/describe is anyone there?"), ("describe", {"question": "is anyone there?"}))
 
+    def test_half_characters_are_dropped(self):
+        from hymeno.__main__ import clean
+        self.assertEqual(clean("the bl\udcc3ack cat "), "the black cat")
+        self.assertEqual(clean("¿qué ves?"), "¿qué ves?")
+
     def test_bad_value_is_rejected(self):
         from hymeno.__main__ import direct
         with self.assertRaises(ValueError):
