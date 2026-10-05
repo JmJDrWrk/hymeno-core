@@ -47,10 +47,10 @@ class Result:
 
 
 def reach_prompt(target):
-    return ("Look for %s. Also say whether the way straight ahead of the camera is blocked by an "
-            "obstacle within about 30 cm. Answer only with JSON: "
-            '{"boxes": [{"label": ..., "bbox_2d": [x1, y1, x2, y2]}], "blocked": true or false}. '
-            "If the target is not in sight, boxes is []." % target)
+    """The same question as look (forcing a JSON object made the model miss the
+    target), plus a last line about the way ahead."""
+    return (look_prompt(target) + " Then, on a last line, write BLOCKED if the way straight ahead of the "
+            "camera is blocked by an obstacle within about 30 cm, otherwise CLEAR.")
 
 
 def look_prompt(target):
@@ -80,7 +80,7 @@ class Skills:
         boxes = perception.parse_boxes(answer, self.model.name, width, height)
         box = max(boxes, key=lambda b: b.width * b.height) if boxes else None
         self.journal.write(verb="look", target=target, seconds=round(seconds, 2),
-                           boxes=[vars(b) for b in boxes])
+                           boxes=[vars(b) for b in boxes], answer=answer[:400])
         return box, seconds
 
     def _offset(self, box):
@@ -182,12 +182,12 @@ class Skills:
                 try:
                     jpeg = self.head.photo()
                     width, height = perception.photo_size(jpeg)
-                    answer, seconds = self.model.ask(jpeg, reach_prompt(target), json_only=True,
-                                                     max_tokens=REACH_ANSWER_TOKENS)
-                    boxes, blocked = perception.parse_look(answer, self.model.name, width, height)
+                    answer, seconds = self.model.ask(jpeg, reach_prompt(target), max_tokens=REACH_ANSWER_TOKENS)
+                    boxes = perception.parse_boxes(answer, self.model.name, width, height)
+                    blocked = perception.says_blocked(answer)
                     box = max(boxes, key=lambda b: b.width * b.height) if boxes else None
                     self.journal.write(verb="reach-look", target=target, seconds=round(seconds, 2),
-                                       boxes=[vars(b) for b in boxes], blocked=blocked)
+                                       boxes=[vars(b) for b in boxes], blocked=blocked, answer=answer[:400])
                     with lock:
                         latest["look"] = (time.monotonic(), box, blocked)
                         latest["count"] += 1

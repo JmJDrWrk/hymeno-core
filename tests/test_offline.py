@@ -57,10 +57,10 @@ class FakeModel:
         self.asked += 1
         box = self.looks.pop(0) if self.looks else None
         boxes = [{"label": "x", "bbox_2d": box}] if box else []
-        if json_only:   # reach asks for an object
+        if "BLOCKED" in prompt:   # reach adds a last line about the way ahead
             time.sleep(0.05)
             blocked = self.blocked_after is not None and self.asked > self.blocked_after
-            return json.dumps({"boxes": boxes, "blocked": blocked}), 0.05
+            return "```json\n%s\n```\n%s" % (json.dumps(boxes), "BLOCKED" if blocked else "CLEAR"), 0.05
         return json.dumps(boxes), 0.01
 
     def ask_text(self, prompt, json_only=False):
