@@ -43,6 +43,24 @@ All of 1-3 is a single question to the vision model with the photo. The body's
 limits stay in code: only those few short actions exist, it never walks
 forward when the way is blocked, and it stops after 40 steps or 5 minutes.
 
+### Fast eyes
+
+The vision model understands anything but takes a second or two per look. For
+the 80 everyday things of the COCO set (person, cat, dog, chair, bottle, ...)
+an optional object detector, YOLO, finds them in a few milliseconds on a GPU.
+Whenever a target names one of them, `search`, `face` and `reach` use the
+detector instead and keep the robot moving while they check photos many times
+a second; a goal like "go to the cat" skips the step-by-step loop entirely,
+and the vision model only checks the result. Everything else (a square of
+yellow tape, "the red box") still goes through the vision model.
+
+```bash
+pip install -r requirements-yolo.txt    # with a CUDA GPU, a few GB
+```
+
+`/detect` at the prompt shows what the detector sees and how long it takes.
+To switch it off: `detector: false` in `config.yaml`.
+
 The individual verbs are also available, to try one directly (`/verb`) or to
 plan a goal once into verbs (`/plan`).
 

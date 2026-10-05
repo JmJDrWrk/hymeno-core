@@ -250,6 +250,68 @@ class AgentTest(unittest.TestCase):
         self.assertEqual(body.moves, [])
 
 
+class FakeDetector:
+    """Knows cats; sees what the script says, one list of (x1, x2, width-ish) per photo."""
+    def __init__(self, frames):
+        self.frames = list(frames)
+
+    def class_for(self, target):
+        return "cat" if "cat" in target else None
+
+    def detect(self, jpeg):
+        from hymeno.perception import Box
+        spans = self.frames.pop(0) if self.frames else []
+        return [Box("cat", x1, 0.4, x2, 0.6) for x1, x2 in spans]
+
+
+C_LEFT, C_CENTRE, C_RIGHT, C_NEAR = (0.05, 0.2), (0.45, 0.55), (0.8, 0.95), (0.25, 0.75)
+
+
+class FastEyesTest(unittest.TestCase):
+    def setUp(self):
+        import hymeno.skills as module
+        module.FAST_MIN_PERIOD_S = 0
+        module.SETTLE_S = 0
+
+    def with_detector(self, frames):
+        s, body = skills([])
+        s.detector = FakeDetector(frames)
+        return s, body
+
+    def test_search_turns_until_the_detector_sees_it(self):
+        s, body = self.with_detector([[], [], [C_RIGHT]])
+        self.assertTrue(s.search("a black cat").ok)
+        self.assertEqual(body.drives, [(0.0, 0.5), (0.0, 0.5)])
+        self.assertEqual(s.model.asked, 0)             # the vision model was not needed
+
+    def test_face_turns_until_centred(self):
+        s, body = self.with_detector([[C_LEFT], [C_CENTRE], [C_CENTRE]])
+        self.assertTrue(s.face("the cat").ok)
+        self.assertTrue(body.drives[0][1] > 0)          # turned left towards it
+
+    def test_reach_steers_and_stops_close(self):
+        s, body = self.with_detector([[], [C_RIGHT], [C_CENTRE], [C_NEAR]])
+        self.assertTrue(s.reach("the cat").ok)
+        self.assertEqual(body.drives[0], (0.0, 0.4))   # searching
+        self.assertTrue(body.drives[1][1] < 0)          # steering right
+        self.assertTrue(body.drives[2][0] > 0 and body.drives[2][1] == 0)   # straight on
+
+    def test_other_targets_still_use_the_vision_model(self):
+        s, body = self.with_detector([])
+        s.model.looks = [CENTRE]
+        self.assertTrue(s.look("yellow tape").ok)
+        self.assertEqual(s.model.asked, 1)
+
+    def test_agent_takes_the_fast_path_for_known_things(self):
+        from hymeno.agent import Agent
+        s, body = self.with_detector([[C_RIGHT], [C_CENTRE], [C_NEAR]])
+        s.model.ask_text = lambda prompt, json_only=False: (
+            json.dumps({"kind": "task", "target": "a black cat", "action": "reach"}), 0.1)
+        s.model.ask = lambda jpeg, prompt, json_only=False, max_tokens=None: ("yes, the cat is right there", 0.1)
+        result = Agent(s, tempfile.mkdtemp(), say=lambda m: None).run("ve hacia el gato")
+        self.assertTrue(result.startswith("done"), result)
+
+
 class DirectTest(unittest.TestCase):
     def test_words_describe_the_target_settings_are_named(self):
         from hymeno.__main__ import direct

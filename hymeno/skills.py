@@ -39,6 +39,17 @@ REACH_MAX_S = 90.0
 REACH_NEAR_WIDTH = 0.4         # close enough: the target fills this share of the width
 REACH_ANSWER_TOKENS = 160
 DESCRIBE_TOKENS = 200
+# Fast eyes (detector): the robot keeps moving while photos are checked many
+# times a second.
+FAST_MIN_PERIOD_S = 0.08       # at most about 12 checks a second
+FAST_STATUS_S = 1.0            # progress lines at most this often
+FAST_SEARCH_TURN = 0.5
+FAST_SEARCH_MAX_S = 25.0       # about a full turn (to be measured)
+FAST_FACE_GAIN = 1.4
+FAST_FACE_MAX_S = 10.0
+FAST_FACE_CENTRED_FRAMES = 2
+FAST_LOST_S = 1.5              # not seen for this long: lost
+FAST_REACH_MAX_S = 60.0
 
 
 @dataclass
@@ -62,7 +73,7 @@ def look_prompt(target):
 class Skills:
     """`say` prints progress to the user; `journal` records every look and move."""
 
-    def __init__(self, head, body, model, journal, mirrored=False, dry_run=False, say=print):
+    def __init__(self, head, body, model, journal, mirrored=False, dry_run=False, say=print, detector=None):
         self.head = head
         self.body = body
         self.model = model
@@ -70,6 +81,7 @@ class Skills:
         self.mirrored = mirrored
         self.dry_run = dry_run
         self.say = say
+        self.detector = detector
 
     # ── Perceive ──
 
@@ -160,6 +172,107 @@ class Skills:
             self.body.action("hello")
         return Result(True, "greeted")
 
+    # ── Fast eyes ──
+
+    def fast_class(self, target):
+        """The detector class the target names, when the detector is there."""
+        return self.detector.class_for(target) if self.detector else None
+
+    def _fast_find(self, cls):
+        """Biggest box of that class in a new photo, or None."""
+        boxes = [b for b in self.detector.detect(self.head.photo()) if b.label == cls]
+        return max(boxes, key=lambda b: b.width * b.height) if boxes else None
+
+    def find(self, target):
+        """Biggest box of the target in a new photo, or None: the detector when
+        it knows the target, the vision model otherwise."""
+        cls = self.fast_class(target)
+        return self._fast_find(cls) if cls else self._find(target)[0]
+
+    def _fast_loop(self, verb, cls, max_s, step):
+        """Runs step(box or None, seconds since started, status) many times a
+        second until it returns a Result or max_s passes. step returns
+        (Result or None, (vx, w))."""
+        started = time.monotonic()
+        last_status = 0.0
+        frames = 0
+        try:
+            while time.monotonic() - started < max_s:
+                tick = time.monotonic()
+                box = self._fast_find(cls)
+                frames += 1
+                status = tick - last_status >= FAST_STATUS_S
+                if status:
+                    last_status = tick
+                result, (vx, w) = step(box, tick - started, status)
+                if result is not None:
+                    self.journal.write(verb=verb, target=cls, fast=True, frames=frames,
+                                       seconds=round(time.monotonic() - started, 1), result=result.message)
+                    return result
+                self._drive(vx, w)
+                time.sleep(max(0.0, FAST_MIN_PERIOD_S - (time.monotonic() - tick)))
+            return Result(False, "%s: %s not managed in %d s" % (verb, cls, max_s))
+        finally:
+            self.stop()
+
+    def _fast_search(self, cls, turn_direction):
+        sign = 1 if turn_direction == "left" else -1
+
+        def step(box, elapsed, status):
+            if box is not None:
+                return Result(True, "found a %s at the %s" % (cls, self._where(self._offset(box), box))), (0, 0)
+            if status:
+                self.say("    looking for a %s, turning (%.0fs)" % (cls, elapsed))
+            return None, (0.0, sign * FAST_SEARCH_TURN)
+        return self._fast_loop("search", cls, FAST_SEARCH_MAX_S, step)
+
+    def _fast_face(self, cls):
+        state = {"centred": 0, "seen": time.monotonic()}
+
+        def step(box, elapsed, status):
+            now = time.monotonic()
+            if box is None:
+                if now - state["seen"] > FAST_LOST_S:
+                    return Result(False, "lost sight of the %s" % cls), (0, 0)
+                return None, (0.0, 0.0)
+            state["seen"] = now
+            offset = self._offset(box)
+            if abs(offset) <= CENTER_TOLERANCE:
+                state["centred"] += 1
+                if state["centred"] >= FAST_FACE_CENTRED_FRAMES:
+                    return Result(True, "facing the %s" % cls), (0, 0)
+                return None, (0.0, 0.0)
+            state["centred"] = 0
+            if status:
+                self.say("    %s at the %s, turning" % (cls, self._where(offset, box)))
+            w = max(-REACH_MAX_TURN, min(REACH_MAX_TURN, -offset * FAST_FACE_GAIN))
+            return None, (0.0, w)
+        return self._fast_loop("face", cls, FAST_FACE_MAX_S, step)
+
+    def _fast_reach(self, cls):
+        state = {"seen": None}
+
+        def step(box, elapsed, status):
+            now = time.monotonic()
+            if box is None:
+                if state["seen"] is None or now - state["seen"] > FAST_LOST_S:
+                    if status:
+                        self.say("    no %s in sight, turning to look" % cls)
+                    return None, (0.0, REACH_SEARCH_TURN)
+                return None, (REACH_SPEED * 0.5, 0.0)       # just lost: keep going a moment
+            state["seen"] = now
+            if box.width >= REACH_NEAR_WIDTH:
+                return Result(True, "reached the %s" % cls), (0, 0)
+            offset = self._offset(box)
+            w = max(-REACH_MAX_TURN, min(REACH_MAX_TURN, -offset * REACH_TURN_GAIN))
+            vx = REACH_SPEED * max(0.0, 1.0 - 2.0 * abs(offset))
+            if status:
+                self.say("    %s at the %s: %s" % (cls, self._where(offset, box),
+                         "straight on" if abs(offset) <= CENTER_TOLERANCE else
+                         "steering " + ("left" if w > 0 else "right")))
+            return None, (vx, w)
+        return self._fast_loop("reach", cls, FAST_REACH_MAX_S, step)
+
     # ── Move with a goal ──
 
     def search(self, target, only_turning=True, turn_direction="left", turn_step="medium"):
@@ -167,6 +280,9 @@ class Skills:
         target is in sight, or gives up after about a full turn."""
         if turn_direction not in ("left", "right") or turn_step not in AMOUNTS:
             return Result(False, "search needs turn_direction left/right and turn_step small/medium/large")
+        cls = self.fast_class(target)
+        if cls and only_turning:
+            return self._fast_search(cls, turn_direction)
         for step in range(SEARCH_MAX_STEPS + 1):
             box, _ = self._find(target)
             if box is not None:
@@ -181,6 +297,9 @@ class Skills:
 
     def face(self, target):
         """Turns until the target is centred."""
+        cls = self.fast_class(target)
+        if cls:
+            return self._fast_face(cls)
         for _ in range(FACE_MAX_LOOKS):
             box, _ = self._find(target)
             if box is None:
@@ -198,7 +317,11 @@ class Skills:
         the background and every new look corrects the heading. Stops when it
         is close, when the way is blocked, or after REACH_MAX_S. Searches by
         turning on the spot while it is not in sight; stands still whenever
-        the eyes fall behind."""
+        the eyes fall behind. With the detector (targets it knows) it looks
+        many times a second instead."""
+        cls = self.fast_class(target)
+        if cls:
+            return self._fast_reach(cls)
         latest = {"look": None, "count": 0, "error": None}
         lock = threading.Lock()
         done = threading.Event()

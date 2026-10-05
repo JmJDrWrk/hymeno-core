@@ -21,7 +21,7 @@ try:
 except ImportError:
     pass
 
-from . import __version__, config, planner
+from . import __version__, config, detector as fast_eyes, planner
 from .clients import Body, Head, VisionModel
 from .journal import Journal
 from .agent import Agent
@@ -91,7 +91,8 @@ def direct(line):
 def help_text():
     lines = ["A goal in plain words is worked on step by step by the agent (Ctrl+C stops it).",
              "/plan goal plans it once into these verbs instead.",
-             "/rules shows the house rules it was taught; /world what it saw lately and where.",
+             "/rules shows the house rules it was taught; /world what it saw lately and where;",
+             "/detect what the fast detector (YOLO) sees right now.",
              "/verb runs one directly: the description first, settings as name=value, e.g.",
              "  /search a large fan on the right turn_direction=left turn_step=small",
              "  /turn direction=right amount=large", ""]
@@ -115,7 +116,8 @@ def main():
     body = Body(settings["body"]["url"], max_speed=settings["max_speed"])
     model = VisionModel(**settings["model"])
     skills = Skills(head, body, model, Journal(settings["data_dir"]),
-                    mirrored=settings["head"]["mirrored"], dry_run=args.dry_run, say=say)
+                    mirrored=settings["head"]["mirrored"], dry_run=args.dry_run, say=say,
+                    detector=fast_eyes.load(settings, say=say))
 
     agent = Agent(skills, settings["data_dir"], say=say)
 
@@ -141,6 +143,15 @@ def main():
             continue
         if line == "/world":
             print(agent.world.text())
+            continue
+        if line == "/detect":
+            if skills.detector is None:
+                print("no fast detector")
+            else:
+                started = time.monotonic()
+                boxes = skills.detector.detect(head.photo())
+                print("%d thing(s) in %.0f ms: %s" % (len(boxes), (time.monotonic() - started) * 1000,
+                      ", ".join("%s at %.0f%%" % (b.label, b.center_x * 100) for b in boxes) or "-"))
             continue
         if line:
             try:

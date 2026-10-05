@@ -91,7 +91,8 @@ Order: {goal}
 Answer only with JSON: {{"kind": "question" or "remember" or "forget" or "task",
  "rule": "for remember or forget: only the rule itself, short, without words like 'remember that', in the order's language",
  "target": "for a task: the thing it is about, described in English precisely enough to find it
-            in a photo (e.g. 'a square of yellow electrical tape on the floor'); else empty"}}
+            in a photo (e.g. 'a square of yellow electrical tape on the floor'); else empty",
+ "action": "for a task: find (look for it), face (turn towards it), reach (go to it) or other"}}
 - question: asks what the robot sees or about its surroundings
 - remember / forget: teaches or removes a rule about the house
 - task: anything the robot has to do"""
@@ -204,12 +205,13 @@ class Agent:
         answer, _ = self.skills.model.ask_text(INTENT.format(goal=goal), json_only=True)
         d = parse_json_object(answer) or {}
         kind = d.get("kind") if d.get("kind") in ("question", "remember", "forget", "task") else "task"
-        return kind, str(d.get("rule") or "").strip(), str(d.get("target") or "").strip()
+        action = d.get("action") if d.get("action") in ("find", "face", "reach") else "other"
+        return kind, str(d.get("rule") or "").strip(), str(d.get("target") or "").strip(), action
 
     def _confirm(self, memory, d):
         """The model's own word that the target is in view is not reliable: check
         it with the box-drawing look, and take the side and distance from the box."""
-        box, _ = self.skills._find(memory.target)
+        box = self.skills.find(memory.target)
         if box is None:
             memory.notes.append("Note: you said the target was in view, but a closer look did not find it.")
             d["goal"] = "no"
@@ -220,8 +222,24 @@ class Agent:
 
     # ── The loop ──
 
+    def _fast_task(self, goal, action, target, cls):
+        """Find, face or reach a thing the detector knows: no step-by-step
+        thinking needed; the vision model only checks the result."""
+        self.say("  target: %s -> fast eyes (%s), %s" % (target, cls, action))
+        found = self.skills.search(target)
+        if not found.ok:
+            return "gave up: %s" % found.message
+        self.say("      %s" % found.message)
+        done = self.skills.face(target) if action == "face" else self.skills.reach(target) if action == "reach" else found
+        if done is not found:
+            self.say("      %s" % done.message)
+        if not done.ok:
+            return "gave up: %s" % done.message
+        ok, why = self._check_done(goal)
+        return "done%s: %s" % ("" if ok else " (not confirmed)", why)
+
     def run(self, goal):
-        kind, rule, target = self._intent(goal)
+        kind, rule, target, action = self._intent(goal)
         if kind == "question":
             return "answer: %s" % self.skills.describe(goal).message
         if kind == "remember":
@@ -229,6 +247,9 @@ class Agent:
         if kind == "forget":
             removed = self.rules.remove(rule or goal)
             return "forgot: %s" % "; ".join(removed) if removed else "no rule matched: %s" % (rule or goal)
+        cls = self.skills.fast_class(target) if target else None
+        if cls and action in ("find", "face", "reach"):
+            return self._fast_task(goal, action, target, cls)
         memory = WorkingMemory(goal, target=target)
         self.say("  target: %s" % (target or "(none)"))
         started = time.monotonic()
