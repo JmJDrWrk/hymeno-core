@@ -21,7 +21,7 @@ try:
 except ImportError:
     pass
 
-from . import __version__, config, detector as fast_eyes, planner
+from . import __version__, config, depth as depth_eyes, detector as fast_eyes, planner
 from .clients import Body, Head, VisionModel
 from .journal import Journal
 from .agent import Agent
@@ -92,7 +92,8 @@ def help_text():
     lines = ["A goal in plain words is worked on step by step by the agent (Ctrl+C stops it).",
              "/plan goal plans it once into these verbs instead.",
              "/rules shows the house rules it was taught; /world what it saw lately and where;",
-             "/detect what the fast detector (YOLO) sees right now.",
+             "/detect what the fast detector (YOLO) sees right now;",
+             "/depth how much room the depth eyes see in each direction.",
              "/verb runs one directly: the description first, settings as name=value, e.g.",
              "  /search a large fan on the right turn_direction=left turn_step=small",
              "  /turn direction=right amount=large", ""]
@@ -117,7 +118,7 @@ def main():
     model = VisionModel(**settings["model"])
     skills = Skills(head, body, model, Journal(settings["data_dir"]),
                     mirrored=settings["head"]["mirrored"], dry_run=args.dry_run, say=say,
-                    detector=fast_eyes.load(settings, say=say))
+                    detector=fast_eyes.load(settings, say=say), depth=depth_eyes.load(settings, say=say))
 
     agent = Agent(skills, settings["data_dir"], say=say)
 
@@ -152,6 +153,17 @@ def main():
                 boxes = skills.detector.detect(head.photo())
                 print("%d thing(s) in %.0f ms: %s" % (len(boxes), (time.monotonic() - started) * 1000,
                       ", ".join("%s at %.0f%%" % (b.label, b.center_x * 100) for b in boxes) or "-"))
+            continue
+        if line == "/depth":
+            if skills.depth is None:
+                print("no depth eyes")
+            else:
+                started = time.monotonic()
+                columns = skills.depth.clearances(head.photo())
+                ahead, left, right = skills.room(columns)
+                print("columns left to right (m): %s  in %.0f ms" % (
+                    " ".join("%.2f" % c for c in columns), (time.monotonic() - started) * 1000))
+                print("ahead %.2f m, left %.2f m, right %.2f m" % (ahead, left, right))
             continue
         if line:
             try:

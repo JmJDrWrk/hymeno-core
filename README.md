@@ -61,6 +61,22 @@ pip install -r requirements-yolo.txt    # with a CUDA GPU, a few GB
 `/detect` at the prompt shows what the detector sees and how long it takes.
 To switch it off: `detector: false` in `config.yaml`.
 
+### Depth eyes
+
+Like an animal's peripheral vision, an optional monocular depth model (Depth
+Anything V2, indoor metric) turns each photo into distances in metres many
+times a second. It names nothing; it only tells how much room there is ahead
+and on each side. `wander` uses it to walk around without a goal: straight on
+while the way is clear, drifting towards the roomier side, and turning on the
+spot when something is close.
+
+```bash
+pip install -r requirements-depth.txt
+```
+
+`/depth` at the prompt shows the room in each direction, to tune the
+`WANDER_*` distances in `skills.py`. To switch it off: `depth: false`.
+
 The individual verbs are also available, to try one directly (`/verb`) or to
 plan a goal once into verbs (`/plan`).
 
@@ -79,6 +95,7 @@ a setting:
 | `face(target)` | Turn until it is straight ahead. |
 | `approach(target)` | Walk to it in short steps, looking between them, and stop when it is close. |
 | `reach(target)` | Walk to it without stopping: the eyes keep looking in the background and each new look corrects the heading. Stops when close, when the way ahead is blocked, or when the eyes fall behind. |
+| `wander()` | Walk around wherever there is room, avoiding obstacles, with the depth eyes. |
 
 Settings always go by name (`turn_step=large`); everything else is the
 description of the target, so a word like "large" in "a large fan" is never
