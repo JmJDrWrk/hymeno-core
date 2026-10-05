@@ -29,7 +29,7 @@ APPROACH_NEAR_BOTTOM = 0.95    # ...or reaches the bottom of the picture (things
 APPROACH_LOST_LOOKS = 2
 # reach: walks without stopping while the eyes keep looking.
 REACH_TICK_S = 0.25            # how often the command is sent (it also keeps the walk alive)
-REACH_SPEED = 0.35             # forward command while heading to the target
+REACH_SPEED = 1.0              # forward command while heading to the target: full throttle
 REACH_TURN_GAIN = 1.6          # turn command per unit of offset (target at the edge: 0.5 -> 0.8)
 REACH_MAX_TURN = 0.6
 REACH_SEARCH_TURN = 0.4        # turning on the spot while the target is not in sight

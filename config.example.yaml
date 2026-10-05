@@ -15,6 +15,6 @@ model:
   keep_alive: 15m                    # how long Ollama keeps the model loaded
   max_answer_tokens: 100             # short answers are what make looking fast
 
-max_speed: 0.6                       # no walk or turn command above this (0-1)
+max_speed: 1.0                       # no walk or turn command above this (0-1); 1 = full throttle
 
 data_dir: data                       # journal of every look and move

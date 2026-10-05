@@ -15,7 +15,7 @@ DEFAULTS = {
         "keep_alive": "15m",
         "max_answer_tokens": 100,
     },
-    "max_speed": 0.6,
+    "max_speed": 1.0,
     "data_dir": "data",
 }
 
