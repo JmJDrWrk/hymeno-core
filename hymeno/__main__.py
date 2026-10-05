@@ -5,7 +5,8 @@
     python -m hymeno --dry-run            # looks and plans, never moves the robot
 
 At the prompt, an order in any language is planned by the model into verbs;
-"/verb arguments" runs one verb directly (e.g. "/face a yellow square"),
+"/verb description name=value" runs one verb directly (e.g.
+"/search a fan turn_direction=right"),
 "/help" lists the verbs. Ctrl+C stops the robot and the current order; at the
 prompt it exits."""
 
@@ -44,31 +45,44 @@ def run_order(skills, model, order):
 
 
 def direct(line):
-    """'/verb words...' -> (verb, args), for trying a verb without the planner."""
+    """'/verb words... name=value...' -> (verb, args), for trying a verb
+    without the planner. Settings always go as name=value; the remaining
+    words are the target, so a word describing it is never taken for one."""
     words = line[1:].split()
-    verb, rest = words[0], words[1:]
+    verb = words[0] if words else ""
     if verb not in VERBS:
         raise ValueError("unknown verb %r; /help lists them" % verb)
     params = VERBS[verb][0]
-    if verb == "turn":
-        args = {"direction": rest[0] if rest else "left"}
-        if len(rest) > 1:
-            args["amount"] = rest[1]
-    elif verb == "forward":
-        args = {"amount": rest[0]} if rest else {}
-    elif "target" in params:
-        if not rest:
-            raise ValueError("%s needs something to look for" % verb)
-        args = {"target": " ".join(rest)}
-    else:
-        args = {}
-    return verb, args
+    args, rest = {}, []
+    for word in words[1:]:
+        name, sep, value = word.partition("=")
+        if sep and name in params:
+            kind = params[name][0]
+            if kind is bool:
+                if value.lower() not in ("true", "false", "yes", "no", "1", "0"):
+                    raise ValueError("%s must be true or false" % name)
+                args[name] = value.lower() in ("true", "yes", "1")
+            else:
+                args[name] = value
+        else:
+            rest.append(word)
+    if rest:
+        if "target" not in params:
+            raise ValueError("%s takes no description; settings go as name=value" % verb)
+        args["target"] = " ".join(rest)
+    return planner.validate([{"verb": verb, "args": args}])[0]
 
 
 def help_text():
-    lines = ["Orders in plain words are planned into these verbs; /verb runs one directly:"]
+    lines = ["Orders in plain words are planned into these verbs.",
+             "/verb runs one directly: the description first, settings as name=value, e.g.",
+             "  /search a large fan on the right turn_direction=left turn_step=small",
+             "  /turn direction=right amount=large", ""]
     for verb, (args, summary) in VERBS.items():
         lines.append("  /%-9s %s" % (verb, summary))
+        for name, (_, required, choices, text) in args.items():
+            if name != "target":
+                lines.append("  %11s%s=%s  %s" % ("", name, "|".join(choices) if choices else "true|false", text))
     return "\n".join(lines)
 
 

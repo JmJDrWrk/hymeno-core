@@ -41,9 +41,13 @@ a setting:
 | `forward(amount)` | Walk forward a little. |
 | `stop()` | Stop. |
 | `greet()` | Wave hello. |
-| `search(target, only_turning)` | Turn (and maybe step forward) until it is in sight. |
+| `search(target, only_turning, turn_direction, turn_step)` | Turn (and maybe step forward) until it is in sight. |
 | `face(target)` | Turn until it is straight ahead. |
 | `approach(target)` | Walk to it, keeping it centred, and stop when it is close. |
+
+Settings always go by name (`turn_step=large`); everything else is the
+description of the target, so a word like "large" in "a large fan" is never
+taken for a setting.
 
 The model decides *what* to do; the verbs decide *how*, with plain geometry
 (how far off centre the target is, how big it looks). A plan that uses
@@ -112,6 +116,7 @@ will do.
      -> face(target='an electric fan')
         done: facing an electric fan
    hymeno> /look a yellow square on the floor     # one verb, without the planner
+   hymeno> /search a large fan turn_direction=right turn_step=large
    hymeno> /help
    ```
 

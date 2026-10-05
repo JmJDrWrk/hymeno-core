@@ -113,9 +113,11 @@ class Skills:
 
     # ── Move with a goal ──
 
-    def search(self, target, only_turning=True):
+    def search(self, target, only_turning=True, turn_direction="left", turn_step="medium"):
         """Turns (and, unless only_turning, sometimes steps forward) until the
         target is in sight, or gives up after about a full turn."""
+        if turn_direction not in ("left", "right") or turn_step not in AMOUNTS:
+            return Result(False, "search needs turn_direction left/right and turn_step small/medium/large")
         for step in range(SEARCH_MAX_STEPS + 1):
             box, _ = self._find(target)
             if box is not None:
@@ -125,7 +127,7 @@ class Skills:
             self.say("    not in sight, turning (%d/%d)" % (step + 1, SEARCH_MAX_STEPS))
             if not only_turning and step and step % SEARCH_FORWARD_EVERY == 0:
                 self.forward("small")
-            self.turn("left", "medium")
+            self.turn(turn_direction, turn_step)
         return Result(False, "%s not found after a full search" % target)
 
     def face(self, target):
@@ -165,22 +167,27 @@ class Skills:
         return Result(False, "did not reach %s" % target)
 
 
-# What the planner may use: verb -> {argument: (type, required, description)}.
+# What the planner may use:
+#   verb -> ({argument: (type, required, allowed values or None, description)}, summary)
+# Argument names say what they are about (turn_step, not size), so a word that
+# describes the target ("a large fan") is never taken for a setting.
+SIDES = ("left", "right")
+STEPS = tuple(AMOUNTS)
+TARGET = (str, True, None, "what it is about, described in English")
 VERBS = {
-    "look": ({"target": (str, True, "what to look for, described in English")},
-             "Check whether something is in sight and where."),
-    "turn": ({"direction": (str, True, "left or right"),
-              "amount": (str, False, "small, medium or large (default medium)")},
+    "look": ({"target": TARGET}, "Check whether something is in sight and where."),
+    "turn": ({"direction": (str, True, SIDES, "which way to turn"),
+              "amount": (str, False, STEPS, "how far (default medium)")},
              "Turn on the spot."),
-    "forward": ({"amount": (str, False, "small, medium or large (default small)")},
+    "forward": ({"amount": (str, False, STEPS, "how far (default small)")},
                 "Walk forward a little."),
     "stop": ({}, "Stop moving."),
     "greet": ({}, "Wave hello."),
-    "search": ({"target": (str, True, "what to look for, described in English"),
-                "only_turning": (bool, False, "true to search by turning on the spot only (default true)")},
+    "search": ({"target": TARGET,
+                "only_turning": (bool, False, None, "search by turning on the spot only (default true)"),
+                "turn_direction": (str, False, SIDES, "which way to turn while searching (default left)"),
+                "turn_step": (str, False, STEPS, "the size of each turning step (default medium)")},
                "Turn (and, unless only_turning, step forward) until the target is in sight."),
-    "face": ({"target": (str, True, "what to face, described in English")},
-             "Turn until the target is straight ahead. It must be in sight."),
-    "approach": ({"target": (str, True, "what to walk to, described in English")},
-                 "Walk to the target and stop close to it. It must be in sight."),
+    "face": ({"target": TARGET}, "Turn until the target is straight ahead. It must be in sight."),
+    "approach": ({"target": TARGET}, "Walk to the target and stop close to it. It must be in sight."),
 }

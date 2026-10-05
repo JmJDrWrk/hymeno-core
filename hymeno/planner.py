@@ -28,8 +28,9 @@ Request: %s"""
 def describe_verbs():
     lines = []
     for verb, (args, summary) in VERBS.items():
-        params = ", ".join("%s%s: %s" % (name, "" if required else " (optional)", text)
-                           for name, (_, required, text) in args.items())
+        params = ", ".join("%s%s: %s%s" % (name, "" if required else " (optional)", text,
+                                           "; one of " + "/".join(choices) if choices else "")
+                           for name, (_, required, choices, text) in args.items())
         lines.append("- %s(%s): %s" % (verb, params, summary))
     return "\n".join(lines)
 
@@ -48,10 +49,12 @@ def validate(plan):
         for name, value in args.items():
             if name not in allowed:
                 raise ValueError("%s has no argument %r" % (verb, name))
-            kind = allowed[name][0]
+            kind, _, choices, _ = allowed[name]
             if not isinstance(value, kind):
                 raise ValueError("%s: %s must be %s" % (verb, name, kind.__name__))
-        for name, (_, required, _) in allowed.items():
+            if choices and value not in choices:
+                raise ValueError("%s: %s must be one of %s" % (verb, name, "/".join(choices)))
+        for name, (_, required, _, _) in allowed.items():
             if required and name not in args:
                 raise ValueError("%s needs %s" % (verb, name))
         steps.append((verb, args))

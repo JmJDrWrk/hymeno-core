@@ -95,11 +95,35 @@ class SkillsTest(unittest.TestCase):
         self.assertTrue(s.approach("x").ok)
         self.assertEqual([m[0] for m in body.moves], ["forward", "right", "forward"])
 
+    def test_search_turns_the_way_asked(self):
+        s, body = skills([None, CENTRE])
+        self.assertTrue(s.search("x", turn_direction="right", turn_step="large").ok)
+        self.assertEqual(body.moves, [("right", 1.0)])
+
     def test_mirrored_picture_turns_the_other_way(self):
         s, body = skills([LEFT, CENTRE])
         s.mirrored = True
         s.face("x")
         self.assertEqual([m[0] for m in body.moves], ["right"])
+
+
+class DirectTest(unittest.TestCase):
+    def test_words_describe_the_target_settings_are_named(self):
+        from hymeno.__main__ import direct
+        verb, args = direct("/search a large fan on the right turn_direction=left turn_step=small")
+        self.assertEqual(verb, "search")
+        self.assertEqual(args, {"target": "a large fan on the right", "turn_direction": "left", "turn_step": "small"})
+
+    def test_bad_value_is_rejected(self):
+        from hymeno.__main__ import direct
+        with self.assertRaises(ValueError):
+            direct("/search a fan turn_step=huge")
+
+    def test_turn_takes_no_description(self):
+        from hymeno.__main__ import direct
+        with self.assertRaises(ValueError):
+            direct("/turn right")
+        self.assertEqual(direct("/turn direction=right amount=large"), ("turn", {"direction": "right", "amount": "large"}))
 
 
 class PlannerTest(unittest.TestCase):
