@@ -43,7 +43,8 @@ a setting:
 | `greet()` | Wave hello. |
 | `search(target, only_turning, turn_direction, turn_step)` | Turn (and maybe step forward) until it is in sight. |
 | `face(target)` | Turn until it is straight ahead. |
-| `approach(target)` | Walk to it, keeping it centred, and stop when it is close. |
+| `approach(target)` | Walk to it in short steps, looking between them, and stop when it is close. |
+| `reach(target)` | Walk to it without stopping: the eyes keep looking in the background and each new look corrects the heading. Stops when close, when the way ahead is blocked, or when the eyes fall behind. |
 
 Settings always go by name (`turn_step=large`); everything else is the
 description of the target, so a word like "large" in "a large fan" is never

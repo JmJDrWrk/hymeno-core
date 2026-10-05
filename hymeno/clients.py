@@ -49,11 +49,18 @@ class Body:
         """One of the robot's tricks, e.g. "hello"."""
         self._post("/api/v1/action", {"action": name})
 
+    def _clamped(self, vx, vy, w):
+        limit = self.max_speed
+        return {k: "%.3f" % max(-limit, min(limit, v)) for k, v in (("vx", vx), ("vy", vy), ("w", w))}
+
+    def drive(self, vx=0.0, vy=0.0, w=0.0):
+        """Walks with this command for about a second; send it again (with the
+        same or a new command) to keep going. For continuous driving."""
+        self._post("/api/v1/walk", self._clamped(vx, vy, w))
+
     def move(self, vx=0.0, vy=0.0, w=0.0, duration_s=0.5):
         """Walks with (vx forward, vy left, w turn left) for duration_s, then stops."""
-        limit = self.max_speed
-        command = {k: max(-limit, min(limit, v)) for k, v in (("vx", vx), ("vy", vy), ("w", w))}
-        self._post("/api/v1/walk", {k: "%.3f" % v for k, v in command.items()})
+        self._post("/api/v1/walk", self._clamped(vx, vy, w))
         try:
             end = time.monotonic() + duration_s
             while time.monotonic() < end:
@@ -91,9 +98,9 @@ class VisionModel:
         r.raise_for_status()
         return r.json().get("response", ""), time.monotonic() - started
 
-    def ask(self, jpeg, prompt):
+    def ask(self, jpeg, prompt, json_only=False, max_tokens=None):
         """A question about a photo. Returns (answer text, seconds taken)."""
-        return self._generate(prompt, images=[jpeg])
+        return self._generate(prompt, images=[jpeg], json_only=json_only, max_tokens=max_tokens)
 
     PLAN_TOKENS = 400
 

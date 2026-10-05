@@ -16,7 +16,8 @@ Rules:
 - Describe every target in English, precisely enough to recognise it in a photo
   (for example "an electric fan" or "a square of yellow electrical tape on the floor").
 - "face" and "approach" need the target in sight: put "search" first unless the
-  request says it is already in view.
+  request says it is already in view. "reach" searches by itself.
+- To go somewhere or to something, prefer "reach" (it walks without stopping).
 - Keep plans short. Use only the arguments listed.
 - If the request cannot be done with these verbs, return an empty plan and say why.
 

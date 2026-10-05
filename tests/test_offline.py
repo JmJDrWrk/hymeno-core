@@ -4,6 +4,7 @@ python -m unittest discover tests"""
 import io
 import json
 import tempfile
+import time
 import unittest
 
 from PIL import Image
@@ -27,12 +28,16 @@ class FakeHead:
 class FakeBody:
     def __init__(self):
         self.moves = []
+        self.drives = []
 
     def move(self, vx=0.0, vy=0.0, w=0.0, duration_s=0.5):
         self.moves.append(("forward" if vx else "left" if w > 0 else "right", duration_s))
 
     def stop(self):
         pass
+
+    def drive(self, vx=0.0, vy=0.0, w=0.0):
+        self.drives.append((round(vx, 2), round(w, 2)))
 
     def action(self, name):
         self.moves.append((name, 0))
@@ -42,21 +47,30 @@ class FakeModel:
     """Answers looks from a script of boxes (qwen2.5 scale, 1036 wide) and plans from a fixed plan."""
     name = "qwen2.5vl:7b"
 
-    def __init__(self, looks=(), plan=None):
+    def __init__(self, looks=(), plan=None, blocked_after=None):
         self.looks = list(looks)
         self.plan = plan
+        self.blocked_after = blocked_after
+        self.asked = 0
 
-    def ask(self, jpeg_bytes, prompt):
+    def ask(self, jpeg_bytes, prompt, json_only=False, max_tokens=None):
+        self.asked += 1
         box = self.looks.pop(0) if self.looks else None
-        return (json.dumps([{"label": "x", "bbox_2d": box}]) if box else "[]"), 0.01
+        boxes = [{"label": "x", "bbox_2d": box}] if box else []
+        if json_only:   # reach asks for an object
+            time.sleep(0.05)
+            blocked = self.blocked_after is not None and self.asked > self.blocked_after
+            return json.dumps({"boxes": boxes, "blocked": blocked}), 0.05
+        return json.dumps(boxes), 0.01
 
     def ask_text(self, prompt, json_only=False):
         return json.dumps(self.plan), 0.01
 
 
-def skills(looks):
+def skills(looks, blocked_after=None):
     body = FakeBody()
-    s = Skills(FakeHead(), body, FakeModel(looks), Journal(tempfile.mkdtemp()), say=lambda m: None)
+    s = Skills(FakeHead(), body, FakeModel(looks, blocked_after=blocked_after), Journal(tempfile.mkdtemp()),
+               say=lambda m: None)
     return s, body
 
 
@@ -68,6 +82,7 @@ class SkillsTest(unittest.TestCase):
     def setUp(self):
         import hymeno.skills as module
         module.SETTLE_S = 0   # no waiting in tests
+        module.REACH_TICK_S = 0.02
 
     def test_face_turns_towards_the_target_then_stops(self):
         s, body = skills([LEFT, CENTRE])
@@ -99,6 +114,25 @@ class SkillsTest(unittest.TestCase):
         s, body = skills([None, CENTRE])
         self.assertTrue(s.search("x", turn_direction="right", turn_step="large").ok)
         self.assertEqual(body.moves, [("right", 1.0)])
+
+    def test_reach_steers_without_stopping_and_stops_when_near(self):
+        s, body = skills([RIGHT, RIGHT, CENTRE, CENTRE, NEAR])
+        result = s.reach("x")
+        self.assertTrue(result.ok)
+        turns = [w for vx, w in body.drives]
+        self.assertTrue(any(w < 0 for w in turns))                  # steered right
+        self.assertTrue(any(vx > 0 and w == 0 for vx, w in body.drives))   # then straight on
+
+    def test_reach_stops_when_blocked(self):
+        s, body = skills([CENTRE] * 5, blocked_after=2)
+        result = s.reach("x")
+        self.assertFalse(result.ok)
+        self.assertIn("blocked", result.message)
+
+    def test_reach_searches_by_turning(self):
+        s, body = skills([None, None, CENTRE, NEAR])
+        self.assertTrue(s.reach("x").ok)
+        self.assertIn((0.0, 0.4), body.drives)
 
     def test_mirrored_picture_turns_the_other_way(self):
         s, body = skills([LEFT, CENTRE])

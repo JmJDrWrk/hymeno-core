@@ -4,6 +4,7 @@ argument, never a setting. Movements are short and always end stopped.
 Every verb returns a Result; the planner chains verbs and stops at the first
 one that fails."""
 
+import threading
 import time
 from dataclasses import dataclass
 
@@ -26,12 +27,30 @@ APPROACH_MAX_STEPS = 15
 APPROACH_NEAR_WIDTH = 0.4      # close enough: the target fills this share of the width...
 APPROACH_NEAR_BOTTOM = 0.95    # ...or reaches the bottom of the picture (things on the floor)
 APPROACH_LOST_LOOKS = 2
+# reach: walks without stopping while the eyes keep looking.
+REACH_TICK_S = 0.25            # how often the command is sent (it also keeps the walk alive)
+REACH_SPEED = 0.35             # forward command while heading to the target
+REACH_TURN_GAIN = 1.6          # turn command per unit of offset (target at the edge: 0.5 -> 0.8)
+REACH_MAX_TURN = 0.6
+REACH_SEARCH_TURN = 0.4        # turning on the spot while the target is not in sight
+REACH_LOST_LOOKS = 2           # looks without the target before searching again
+REACH_STALE_S = 3.0            # no new look for this long: stand still until one comes
+REACH_MAX_S = 90.0
+REACH_NEAR_WIDTH = 0.4         # close enough: the target fills this share of the width
+REACH_ANSWER_TOKENS = 160
 
 
 @dataclass
 class Result:
     ok: bool
     message: str
+
+
+def reach_prompt(target):
+    return ("Look for %s. Also say whether the way straight ahead of the camera is blocked by an "
+            "obstacle within about 30 cm. Answer only with JSON: "
+            '{"boxes": [{"label": ..., "bbox_2d": [x1, y1, x2, y2]}], "blocked": true or false}. '
+            "If the target is not in sight, boxes is []." % target)
 
 
 def look_prompt(target):
@@ -148,6 +167,83 @@ class Skills:
             self._move("turn", w=AMOUNTS["small"][0] * (1 if offset < 0 else -1), ms=ms)
         return Result(False, "could not centre %s" % target)
 
+    def reach(self, target):
+        """Walks towards the target without stopping: the eyes keep looking in
+        the background and every new look corrects the heading. Stops when it
+        is close, when the way is blocked, or after REACH_MAX_S. Searches by
+        turning on the spot while it is not in sight; stands still whenever
+        the eyes fall behind."""
+        latest = {"look": None, "count": 0, "error": None}
+        lock = threading.Lock()
+        done = threading.Event()
+
+        def eyes():
+            while not done.is_set():
+                try:
+                    jpeg = self.head.photo()
+                    width, height = perception.photo_size(jpeg)
+                    answer, seconds = self.model.ask(jpeg, reach_prompt(target), json_only=True,
+                                                     max_tokens=REACH_ANSWER_TOKENS)
+                    boxes, blocked = perception.parse_look(answer, self.model.name, width, height)
+                    box = max(boxes, key=lambda b: b.width * b.height) if boxes else None
+                    self.journal.write(verb="reach-look", target=target, seconds=round(seconds, 2),
+                                       boxes=[vars(b) for b in boxes], blocked=blocked)
+                    with lock:
+                        latest["look"] = (time.monotonic(), box, blocked)
+                        latest["count"] += 1
+                except Exception as e:   # the driver stands still until looks come again
+                    with lock:
+                        latest["error"] = str(e)
+                    time.sleep(1.0)
+
+        thread = threading.Thread(target=eyes, daemon=True)
+        thread.start()
+        started = time.monotonic()
+        seen_count, lost, last_seen = 0, 0, 0
+        command = (0.0, 0.0)
+        try:
+            while time.monotonic() - started < REACH_MAX_S:
+                with lock:
+                    look, count = latest["look"], latest["count"]
+                now = time.monotonic()
+                if look is None or now - look[0] > REACH_STALE_S:
+                    command = (0.0, 0.0)          # no fresh look: stand still
+                elif count != seen_count:         # a new look: decide again
+                    seen_count = count
+                    _, box, blocked = look
+                    if blocked:
+                        return Result(False, "the way is blocked")
+                    if box is not None:
+                        lost, last_seen = 0, count
+                        if box.width >= REACH_NEAR_WIDTH:
+                            return Result(True, "reached %s" % target)
+                        offset = self._offset(box)
+                        w = max(-REACH_MAX_TURN, min(REACH_MAX_TURN, -offset * REACH_TURN_GAIN))
+                        vx = REACH_SPEED * max(0.0, 1.0 - 2.0 * abs(offset))
+                        command = (vx, w)
+                        self.say("    %s at the %s: %s" % (target, self._where(offset, box),
+                                 "straight on" if abs(offset) <= CENTER_TOLERANCE else
+                                 "steering " + ("left" if w > 0 else "right")))
+                    else:
+                        lost += 1
+                        if last_seen and lost < REACH_LOST_LOOKS:
+                            self.say("    lost sight of %s, keeping the heading" % target)
+                        else:
+                            command = (0.0, REACH_SEARCH_TURN)
+                            self.say("    %s not in sight, turning to look" % target)
+                self._drive(*command)
+                time.sleep(REACH_TICK_S)
+            return Result(False, "gave up reaching %s" % target)
+        finally:
+            done.set()
+            self.stop()
+
+    def _drive(self, vx, w):
+        if not self.dry_run and (vx or w):
+            self.body.drive(vx=vx, w=w)
+        elif not self.dry_run:
+            self.body.stop()
+
     def approach(self, target):
         """Walks towards the target, keeping it centred, and stops when it is close."""
         lost = 0
@@ -193,5 +289,8 @@ VERBS = {
                 "turn_step": (str, False, STEPS, "the size of each turning step (default medium)")},
                "Turn (and, unless only_turning, step forward) until the target is in sight."),
     "face": ({"target": TARGET}, "Turn until the target is straight ahead. It must be in sight."),
-    "approach": ({"target": TARGET}, "Walk to the target and stop close to it. It must be in sight."),
+    "approach": ({"target": TARGET}, "Walk to the target in short steps, looking between them, and stop "
+                                     "close to it. It must be in sight."),
+    "reach": ({"target": TARGET}, "Walk to the target without stopping, steering as it goes, and stop close "
+                                  "to it or if the way is blocked. Searches by turning if it is not in sight."),
 }

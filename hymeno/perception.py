@@ -51,6 +51,21 @@ def model_scale(model_name, width, height):
     return w, h
 
 
+def parse_look(answer, model_name, photo_width, photo_height):
+    """A JSON object {"boxes": [...], "blocked": bool} -> (boxes, blocked).
+    A plain list is taken as the boxes; anything unreadable as nothing seen."""
+    try:
+        data = json.loads(answer)
+    except ValueError:
+        return parse_boxes(answer, model_name, photo_width, photo_height), False
+    if isinstance(data, list):
+        return parse_boxes(answer, model_name, photo_width, photo_height), False
+    if not isinstance(data, dict):
+        return [], False
+    boxes = parse_boxes(json.dumps(data.get("boxes") or []), model_name, photo_width, photo_height)
+    return boxes, data.get("blocked") is True
+
+
 def parse_boxes(answer, model_name, photo_width, photo_height):
     """The first JSON list in the answer (models like to wrap it in ``` fences)
     as boxes; anything else is ignored."""
