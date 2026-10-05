@@ -89,7 +89,7 @@ Answer only with one JSON object, very short values:
 INTENT = """A user gives an order to a small four-legged robot with a camera. Classify it.
 Order: {goal}
 Answer only with JSON: {{"kind": "question" or "remember" or "forget" or "task",
- "rule": "for remember or forget: the rule, short, in the order's language",
+ "rule": "for remember or forget: only the rule itself, short, without words like 'remember that', in the order's language",
  "target": "for a task: the thing it is about, described in English precisely enough to find it
             in a photo (e.g. 'a square of yellow electrical tape on the floor'); else empty"}}
 - question: asks what the robot sees or about its surroundings
