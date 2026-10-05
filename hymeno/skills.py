@@ -9,8 +9,12 @@ from dataclasses import dataclass
 
 from . import perception
 
-# Turning and walking steps: (command 0-1, milliseconds).
+# Turning steps: (command 0-1, milliseconds).
 AMOUNTS = {"small": (0.5, 300), "medium": (0.5, 600), "large": (0.5, 1000)}
+# Walking steps are longer: the robot needs about a quarter of a second to
+# start its gait, and the walk moves one leg at a time, so a short command
+# barely lifts a foot before it stops.
+FORWARD_AMOUNTS = {"small": (0.5, 1000), "medium": (0.5, 2000), "large": (0.5, 3000)}
 SETTLE_S = 0.4                 # after a move, so the next photo is sharp
 CENTER_TOLERANCE = 0.12        # centred: within this share of the width from the middle
 FACE_MAX_LOOKS = 10
@@ -95,9 +99,9 @@ class Skills:
         return Result(True, "turned %s (%s)" % (direction, amount))
 
     def forward(self, amount="small"):
-        if amount not in AMOUNTS:
+        if amount not in FORWARD_AMOUNTS:
             return Result(False, "forward needs amount small/medium/large")
-        speed, ms = AMOUNTS[amount]
+        speed, ms = FORWARD_AMOUNTS[amount]
         self._move("forward", vx=speed, ms=ms)
         return Result(True, "walked forward (%s)" % amount)
 
