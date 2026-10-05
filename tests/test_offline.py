@@ -134,6 +134,14 @@ class SkillsTest(unittest.TestCase):
         self.assertTrue(s.reach("x").ok)
         self.assertIn((0.0, 0.4), body.drives)
 
+    def test_describe_answers_with_the_model_text(self):
+        s, body = skills([])
+        s.model.ask = lambda jpeg, prompt, json_only=False, max_tokens=None: ("Veo una alfombra y una silla.", 0.5)
+        result = s.describe("¿qué ves?")
+        self.assertTrue(result.ok)
+        self.assertIn("alfombra", result.message)
+        self.assertEqual(body.moves, [])
+
     def test_mirrored_picture_turns_the_other_way(self):
         s, body = skills([LEFT, CENTRE])
         s.mirrored = True
@@ -147,6 +155,10 @@ class DirectTest(unittest.TestCase):
         verb, args = direct("/search a large fan on the right turn_direction=left turn_step=small")
         self.assertEqual(verb, "search")
         self.assertEqual(args, {"target": "a large fan on the right", "turn_direction": "left", "turn_step": "small"})
+
+    def test_describe_takes_the_question(self):
+        from hymeno.__main__ import direct
+        self.assertEqual(direct("/describe is anyone there?"), ("describe", {"question": "is anyone there?"}))
 
     def test_bad_value_is_rejected(self):
         from hymeno.__main__ import direct

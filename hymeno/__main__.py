@@ -67,9 +67,10 @@ def direct(line):
         else:
             rest.append(word)
     if rest:
-        if "target" not in params:
+        free = "target" if "target" in params else "question" if "question" in params else None
+        if free is None:
             raise ValueError("%s takes no description; settings go as name=value" % verb)
-        args["target"] = " ".join(rest)
+        args[free] = " ".join(rest)
     return planner.validate([{"verb": verb, "args": args}])[0]
 
 

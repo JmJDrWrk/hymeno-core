@@ -38,6 +38,7 @@ REACH_STALE_S = 3.0            # no new look for this long: stand still until on
 REACH_MAX_S = 90.0
 REACH_NEAR_WIDTH = 0.4         # close enough: the target fills this share of the width
 REACH_ANSWER_TOKENS = 160
+DESCRIBE_TOKENS = 200
 
 
 @dataclass
@@ -92,6 +93,17 @@ class Skills:
     def _where(offset, box):
         side = "centre" if abs(offset) <= CENTER_TOLERANCE else ("left" if offset < 0 else "right")
         return "%s (%.0f%% of the width)" % (side, box.width * 100)
+
+    def describe(self, question="What do you see?"):
+        """Answers a question about what the camera sees, in the language the
+        question is written in."""
+        jpeg = self.head.photo()
+        prompt = ("You are the eyes of a small four-legged robot; this photo is what its camera sees "
+                  "right now, from just above the floor. Answer the question briefly, in the same "
+                  "language as the question.\nQuestion: %s" % question)
+        answer, seconds = self.model.ask(jpeg, prompt, max_tokens=DESCRIBE_TOKENS)
+        self.journal.write(verb="describe", question=question, seconds=round(seconds, 2), answer=answer[:600])
+        return Result(True, "%s (%.1fs)" % (answer.strip(), seconds))
 
     def look(self, target):
         box, seconds = self._find(target)
@@ -275,6 +287,9 @@ SIDES = ("left", "right")
 STEPS = tuple(AMOUNTS)
 TARGET = (str, True, None, "what it is about, described in English")
 VERBS = {
+    "describe": ({"question": (str, False, None, "the user's question about what is in sight, word for word "
+                                                 "and in the user's language (default: what do you see?)")},
+                 "Answer a question about what the camera sees right now."),
     "look": ({"target": TARGET}, "Check whether something is in sight and where."),
     "turn": ({"direction": (str, True, SIDES, "which way to turn"),
               "amount": (str, False, STEPS, "how far (default medium)")},

@@ -36,6 +36,7 @@ a setting:
 
 | Verb | What it does |
 |------|--------------|
+| `describe(question)` | Answer a question about what the camera sees ("what do you see?"). |
 | `look(target)` | Is it in sight, and where? |
 | `turn(direction, amount)` | Turn on the spot, left or right, small/medium/large. |
 | `forward(amount)` | Walk forward a little. |

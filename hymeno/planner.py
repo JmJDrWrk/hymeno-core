@@ -13,6 +13,9 @@ Turn the user's request into a short plan using ONLY these verbs:
 %s
 
 Rules:
+- Questions about what the robot sees ("what do you see?", "is anyone there?")
+  are answered with "describe", passing the question as the user wrote it.
+  Never use "search" or "look" for them.
 - Describe every target in English, precisely enough to recognise it in a photo
   (for example "an electric fan" or "a square of yellow electrical tape on the floor").
 - "face" and "approach" need the target in sight: put "search" first unless the
