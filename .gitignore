@@ -1,0 +1,7 @@
+# Local settings and everything the brain records stay on the machine.
+config.yaml
+data/
+
+__pycache__/
+*.pyc
+.venv/
