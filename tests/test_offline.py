@@ -149,6 +149,43 @@ class SkillsTest(unittest.TestCase):
         self.assertEqual([m[0] for m in body.moves], ["right"])
 
 
+class AgentTest(unittest.TestCase):
+    def setUp(self):
+        import hymeno.skills as module
+        module.SETTLE_S = 0
+
+    def agent_with(self, decisions):
+        from hymeno.agent import Agent
+        s, body = skills([])
+        answers = [json.dumps(d) for d in decisions]
+        s.model.ask = lambda jpeg, prompt, json_only=False, max_tokens=None: (answers.pop(0) if answers else "?", 0.1)
+        return Agent(s, say=lambda m: None), body
+
+    def test_searches_turning_then_walks_and_finishes(self):
+        agent, body = self.agent_with([
+            {"see": "a sofa", "goal_in_view": "no", "way_ahead": "clear", "action": "turn_left", "amount": "medium"},
+            {"see": "yellow tape", "goal_in_view": "right", "way_ahead": "clear", "action": "turn_right", "amount": "small"},
+            {"see": "yellow tape", "goal_in_view": "centre", "way_ahead": "clear", "action": "forward", "amount": "small"},
+            {"see": "yellow tape close", "goal_in_view": "centre", "goal_distance": "near", "action": "done", "say": "llegué"},
+        ])
+        result = agent.run("find the yellow tape")
+        self.assertTrue(result.startswith("done"))
+        self.assertEqual([m[0] for m in body.moves], ["left", "right", "forward"])
+
+    def test_never_walks_into_a_blocked_way(self):
+        agent, body = self.agent_with([
+            {"see": "a wall", "goal_in_view": "centre", "way_ahead": "blocked", "action": "forward", "amount": "large"},
+            {"see": "x", "action": "give_up", "say": "no puedo"},
+        ])
+        self.assertTrue(agent.run("go").startswith("gave up"))
+        self.assertEqual([m[0] for m in body.moves], ["left"])
+
+    def test_stops_after_unreadable_answers(self):
+        agent, body = self.agent_with([])
+        self.assertIn("could not be read", agent.run("go"))
+        self.assertEqual(body.moves, [])
+
+
 class DirectTest(unittest.TestCase):
     def test_words_describe_the_target_settings_are_named(self):
         from hymeno.__main__ import direct

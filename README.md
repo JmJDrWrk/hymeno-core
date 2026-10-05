@@ -26,10 +26,25 @@ the decision-making core of that mind.
 
 ## What it does
 
-You give it orders in plain words, in any language: "find the fan, only
-turning", "face the yellow square and walk up to it". The model turns each
-order into a short plan made only of the verbs the brain knows, and the brain
-carries it out: looking, moving a little, looking again.
+You give it a goal in plain words, in any language: "find your charging
+station: a square of yellow tape on the floor", "look for a person and wave
+hello". It then works on it step by step, like a simple animal:
+
+1. **Observe**: one photo from the robot's camera.
+2. **Interpret it with the goal and its working memory**: what it sees, whether
+   the goal is in view (left, centre, right) and how far, whether the way
+   ahead is clear, given what it has already done (the recent steps, how far
+   it has turned and walked).
+3. **Decide one short action**: turn left or right, walk forward, wave, or
+   finish (done or give up).
+4. **Act, remember, repeat.**
+
+All of 1-3 is a single question to the vision model with the photo. The body's
+limits stay in code: only those few short actions exist, it never walks
+forward when the way is blocked, and it stops after 40 steps or 5 minutes.
+
+The individual verbs are also available, to try one directly (`/verb`) or to
+plan a goal once into verbs (`/plan`).
 
 The verbs are generic; what to look for is always an argument in words, never
 a setting:
@@ -112,11 +127,13 @@ will do.
 
    ```
    $ python -m hymeno
-   hymeno> busca el ventilador girando solo
-     -> search(target='an electric fan', only_turning=True)
-        done: found an electric fan at the right (18% of the width)
-     -> face(target='an electric fan')
-        done: facing an electric fan
+   hymeno> busca tu estación de carga: un cuadrado de cinta amarilla en el suelo
+      1. a sofa and a rug | goal: no (unknown) | ahead: clear -> turn_left medium
+         "Giro para buscar la estación."
+      2. yellow tape on the floor | goal: right (far) | ahead: clear -> turn_right small
+      3. yellow tape on the floor | goal: centre (far) | ahead: clear -> forward medium
+      ...
+   done: He llegado a la estación.
    hymeno> /look a yellow square on the floor     # one verb, without the planner
    hymeno> /search a large fan turn_direction=right turn_step=large
    hymeno> /help

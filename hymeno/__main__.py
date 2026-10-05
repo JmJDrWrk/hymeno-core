@@ -1,10 +1,12 @@
-"""The brain's terminal: give it orders in plain words.
+"""The brain's terminal: give it goals in plain words.
 
     python -m hymeno                      # asks for orders, one after another
     python -m hymeno "find the fan"       # one order, then exit
     python -m hymeno --dry-run            # looks and plans, never moves the robot
 
-At the prompt, an order in any language is planned by the model into verbs;
+At the prompt, a goal in any language is worked on by the agent, which looks
+and decides again at every step ("find your charging station: a square of
+yellow tape on the floor"); "/plan goal" plans it once into verbs instead;
 "/verb description name=value" runs one verb directly (e.g.
 "/search a fan turn_direction=right"),
 "/help" lists the verbs. Ctrl+C stops the robot and the current order; at the
@@ -17,6 +19,7 @@ import time
 from . import __version__, config, planner
 from .clients import Body, Head, VisionModel
 from .journal import Journal
+from .agent import Agent
 from .skills import VERBS, Result, Skills
 
 
@@ -75,7 +78,8 @@ def direct(line):
 
 
 def help_text():
-    lines = ["Orders in plain words are planned into these verbs.",
+    lines = ["A goal in plain words is worked on step by step by the agent (Ctrl+C stops it).",
+             "/plan goal plans it once into these verbs instead.",
              "/verb runs one directly: the description first, settings as name=value, e.g.",
              "  /search a large fan on the right turn_direction=left turn_step=small",
              "  /turn direction=right amount=large", ""]
@@ -120,11 +124,14 @@ def main():
             continue
         if line:
             try:
-                if line.startswith("/"):
+                if line.startswith("/plan "):
+                    run_order(skills, model, line[len("/plan "):])
+                elif line.startswith("/"):
                     run_step(skills, *direct(line))
                     skills.stop()
                 else:
-                    run_order(skills, model, line)
+                    say("goal: %s" % line)
+                    say(Agent(skills, say=say).run(line))
             except KeyboardInterrupt:
                 say("interrupted")
             except Exception as e:   # one bad order must not end the brain
