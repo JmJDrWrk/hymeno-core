@@ -1,21 +1,27 @@
 """The agent: works towards a goal given in plain words, deciding again at every
 step, like a simple animal.
 
-One cycle:
+First the goal is classified with one short question (no photo): a question
+about what it sees is answered at once, a house rule is remembered or
+forgotten, and anything else is a task with a target described in English.
+
+A task runs this cycle:
 
     observe (photo) -> interpret it with the goal, the rules, what was seen
     where, and what happened so far -> decide one action -> act -> remember
 
 until the goal is reached (checked with a second look), it gives up, or it
-runs out of steps or time. Interpreting and deciding are one question to the
-vision model, with the photo.
+runs out of steps or time. Interpreting and deciding are one short question to
+the vision model, with the photo.
 
 The model decides the strategy; the code does the precise work and keeps the
 limits:
+- when the model says the target is in view, the box-drawing look confirms it
+  and gives its side and distance (the model's own word is not reliable);
 - "center_on_goal" and "approach_goal" hand over to the face and reach verbs,
-  which steer with the boxes the model draws (proven, and fast to react);
-- only a few short actions exist; it never walks forward into a part of the
-  floor the model says is not free;
+  which steer with those boxes;
+- only a few short actions exist; it never walks forward into floor the model
+  says is not free;
 - when walking does not change the view, it is stuck: it backs off and turns;
 - "done" is only accepted after a second look agrees."""
 
@@ -27,13 +33,14 @@ from . import perception
 from .memory import Rules, WorldMemory
 
 MOVES = ("look_around", "turn_left", "turn_right", "forward", "back", "strafe_left", "strafe_right")
-ACTIONS = MOVES + ("center_on_goal", "approach_goal", "greet", "remember", "forget", "answer", "done", "give_up")
+ACTIONS = MOVES + ("center_on_goal", "approach_goal", "greet", "done", "give_up")
 AMOUNTS = ("small", "medium", "large")
 MAX_STEPS = 60
 MAX_SECONDS = 600
 MEMORY_STEPS = 8               # recent steps the model is shown
 MAX_BAD_ANSWERS = 3            # unreadable answers in a row before stopping
-DECISION_TOKENS = 260
+DECISION_TOKENS = 90
+INTENT_TOKENS = 120
 CHECK_TOKENS = 60
 MAX_REJECTED_DONE = 2          # "done" the second look disagreed with, before accepting anyway
 STUCK_CHANGE = 4.0             # view change (0-255) below this after walking: it did not move
@@ -46,6 +53,7 @@ PROMPT = """You are the mind of a small four-legged robot. The photo is what its
 now, from just above the floor, looking straight ahead. You cannot see behind you.
 
 Goal, from the user: {goal}
+Target: {target}
 
 House rules the user taught you:
 {rules}
@@ -53,43 +61,40 @@ House rules the user taught you:
 Things seen lately, and where they are from where you face now (rough):
 {world}
 
-Your body: turns are roughly {turns} degrees (small/medium/large); steps roughly {steps} cm.
+Turns are roughly {turns} degrees (small/medium/large); steps roughly {steps} cm.
 So far for this goal: {totals}
 Recent steps, oldest first:
 {history}
 {notes}
-Actions:
-- look_around: turn to look for something (always the same way, to cover the room)
-- turn_left, turn_right: turn by "amount"
-- forward, back, strafe_left, strafe_right: walk by "amount"
-- center_on_goal: turn until the target is straight ahead (it must be in view)
-- approach_goal: walk to the target and stop close to it, steering by itself (it must be in view)
-- greet: wave hello
-- remember / forget: add or remove a house rule, given in "text"
-- answer: reply to a question about what you see, with the reply in "text"; this ends the goal
-- done: the goal is achieved; give_up: it cannot be achieved
+Actions: look_around (turn to look for the target, always the same way), turn_left, turn_right,
+forward, back, strafe_left, strafe_right (all by "amount"), center_on_goal (face the target, it
+must be in view), approach_goal (walk to the target and stop close, it must be in view), greet,
+done (goal achieved), give_up (it cannot be achieved).
 
 How to work:
-- A question about what you see: "answer" straight away. A rule to remember or forget:
-  "remember" or "forget" it, then "done".
-- To find something: if it was seen lately, turn towards where it was. Otherwise
-  "look_around" again and again. After a full turn (about 360 degrees) without finding it,
-  move to a new place (forward if the floor ahead is free), then look around again.
-- When the target is in view: "approach_goal" to go to it, or "center_on_goal" just to face it.
-- Never go forward if the floor straight ahead is not free; turn towards free floor instead.
-- If a note says you seem stuck, go back and turn.
+- If the target was seen lately, turn towards where it was. Otherwise look_around again and
+  again; after a full turn (about 360 degrees) without it, move to a new place, then look again.
+- When the target is in view: approach_goal to go to it, or center_on_goal just to face it.
+- Never go forward if the floor straight ahead is not free.
+- Say the target is in view only if you can really see it in this photo.
 
-Answer only with one JSON object, short values:
-{{"see": "what you see, a few words",
-  "objects": ["main things in view, a few words each"],
-  "target": "the thing the goal is about, described in English precisely enough to find it in a photo",
+Answer only with one JSON object, very short values:
+{{"see": "main things in view, comma separated",
   "goal": "left" or "centre" or "right" or "no",
-  "dist": "near" or "mid" or "far" or "unknown",
-  "free": {{"left": true or false, "centre": true or false, "right": true or false}},
-  "do": one of the actions,
-  "amount": "small" or "medium" or "large",
-  "text": "the rule or the answer, if any, in the language of the goal",
-  "say": "a short sentence for the user about what you are doing, in the language of the goal"}}"""
+  "dist": "near" or "mid" or "far",
+  "free": three letters for the floor left, centre, right: Y if free, N if not, e.g. "YYN",
+  "do": one action,
+  "amount": "small" or "medium" or "large"}}"""
+
+INTENT = """A user gives an order to a small four-legged robot with a camera. Classify it.
+Order: {goal}
+Answer only with JSON: {{"kind": "question" or "remember" or "forget" or "task",
+ "rule": "for remember or forget: the rule, short, in the order's language",
+ "target": "for a task: the thing it is about, described in English precisely enough to find it
+            in a photo (e.g. 'a square of yellow electrical tape on the floor'); else empty"}}
+- question: asks what the robot sees or about its surroundings
+- remember / forget: teaches or removes a rule about the house
+- task: anything the robot has to do"""
 
 CHECK = """You check the work of a small four-legged robot. The photo is what its camera sees now,
 from just above the floor, looking straight ahead.
@@ -134,8 +139,7 @@ class WorkingMemory:
         return "\n".join(s.line(first + i) for i, s in enumerate(recent)) or "none yet"
 
 
-def parse_decision(answer):
-    """The first JSON object in the answer, checked and filled in; None if unusable."""
+def parse_json_object(answer):
     start, end = answer.find("{"), answer.rfind("}")
     if start < 0 or end <= start:
         return None
@@ -143,18 +147,24 @@ def parse_decision(answer):
         d = json.loads(answer[start:end + 1])
     except ValueError:
         return None
-    if not isinstance(d, dict) or d.get("do") not in ACTIONS:
+    return d if isinstance(d, dict) else None
+
+
+def parse_decision(answer):
+    """The decision, checked and filled in; None if unusable."""
+    d = parse_json_object(answer)
+    if d is None or d.get("do") not in ACTIONS:
         return None
     if d.get("amount") not in AMOUNTS:
         d["amount"] = "small"
-    if d.get("goal") not in ("left", "centre", "center", "right", "no"):
-        d["goal"] = "no"
-    d["goal"] = "centre" if d["goal"] == "center" else d["goal"]
-    free = d.get("free") if isinstance(d.get("free"), dict) else {}
-    d["free"] = {side: free.get(side) is not False for side in ("left", "centre", "right")}
-    d["objects"] = [str(o) for o in d.get("objects", []) if o][:8] if isinstance(d.get("objects"), list) else []
-    for key, default in (("see", ""), ("target", ""), ("dist", "unknown"), ("text", ""), ("say", "")):
-        d[key] = str(d.get(key) or default).strip()
+    goal = str(d.get("goal", "no")).lower()
+    d["goal"] = "centre" if goal == "center" else goal if goal in ("left", "centre", "right") else "no"
+    if d.get("dist") not in ("near", "mid", "far"):
+        d["dist"] = "far"
+    letters = (str(d.get("free", "YYY")).upper().replace(" ", "") + "YYY")[:3]
+    d["free"] = {side: letters[i] != "N" for i, side in enumerate(("left", "centre", "right"))}
+    d["see"] = str(d.get("see") or "").strip()
+    d["objects"] = [o.strip() for o in d["see"].split(",") if o.strip()][:8]
     return d
 
 
@@ -163,6 +173,7 @@ class Agent:
 
     def __init__(self, skills, data_dir, say=print):
         self.skills = skills
+        self.stuck_reflex = not skills.dry_run   # in a dry run the view never changes
         self.say = say
         self.rules = Rules(data_dir)
         self.world = WorldMemory()
@@ -189,10 +200,37 @@ class Agent:
             return "right"
         return None
 
+    def _intent(self, goal):
+        answer, _ = self.skills.model.ask_text(INTENT.format(goal=goal), json_only=True)
+        d = parse_json_object(answer) or {}
+        kind = d.get("kind") if d.get("kind") in ("question", "remember", "forget", "task") else "task"
+        return kind, str(d.get("rule") or "").strip(), str(d.get("target") or "").strip()
+
+    def _confirm(self, memory, d):
+        """The model's own word that the target is in view is not reliable: check
+        it with the box-drawing look, and take the side and distance from the box."""
+        box, _ = self.skills._find(memory.target)
+        if box is None:
+            memory.notes.append("Note: you said the target was in view, but a closer look did not find it.")
+            d["goal"] = "no"
+            return
+        offset = self.skills._offset(box)
+        d["goal"] = "centre" if abs(offset) <= 0.12 else ("left" if offset < 0 else "right")
+        d["dist"] = "near" if box.width >= 0.35 else "mid" if box.width >= 0.12 else "far"
+
     # ── The loop ──
 
     def run(self, goal):
-        memory = WorkingMemory(goal)
+        kind, rule, target = self._intent(goal)
+        if kind == "question":
+            return "answer: %s" % self.skills.describe(goal).message
+        if kind == "remember":
+            return ("remembered: %s" if self.rules.add(rule or goal) else "already known: %s") % (rule or goal)
+        if kind == "forget":
+            removed = self.rules.remove(rule or goal)
+            return "forgot: %s" % "; ".join(removed) if removed else "no rule matched: %s" % (rule or goal)
+        memory = WorkingMemory(goal, target=target)
+        self.say("  target: %s" % (target or "(none)"))
         started = time.monotonic()
         bad = 0
         previous, moved = None, False
@@ -204,7 +242,7 @@ class Agent:
             jpeg = self.skills.head.photo()
 
             # Reflex: walking that does not change the view means it is stuck.
-            if previous is not None and moved:
+            if self.stuck_reflex and previous is not None and moved:
                 if perception.view_change(previous, jpeg) < STUCK_CHANGE:
                     memory.stuck += 1
                     memory.notes.append("Note: after the last move the view did not change; you seem stuck.")
@@ -219,7 +257,8 @@ class Agent:
                 memory.stuck, moved = 0, False
                 continue
 
-            prompt = PROMPT.format(goal=goal, rules=self.rules.text(), world=self.world.text(),
+            prompt = PROMPT.format(goal=goal, target=memory.target or "(none)", rules=self.rules.text(),
+                                   world=self.world.text(),
                                    turns="/".join(str(v) for v in TURN_DEGREES.values()),
                                    steps="/".join(str(v) for v in STEP_CM.values()),
                                    totals=memory.totals(), history=memory.history(),
@@ -238,10 +277,14 @@ class Agent:
                 continue
             bad = 0
 
+            if d["goal"] != "no" and memory.target:
+                self._confirm(memory, d)
             self.world.saw(d["objects"])
-            if d["target"] and not memory.target:
-                memory.target = d["target"]
+            if d["goal"] != "no":
+                self.world.saw([memory.target])
             action, amount = d["do"], d["amount"]
+            if action in ("center_on_goal", "approach_goal") and d["goal"] == "no":
+                action = "look_around"
 
             # Limits the model cannot override.
             if action == "forward" and not d["free"]["centre"]:
@@ -255,34 +298,24 @@ class Agent:
             self.say("  %2d. %s | target: %s (%s) | floor L-C-R: %s -> %s%s  [%.1fs]" % (
                 n, d["see"], d["goal"], d["dist"], free, action,
                 " " + amount if action in MOVES else "", seconds))
-            if d["say"]:
-                self.say("      \"%s\"" % d["say"])
 
             step = Step(d["see"], d["goal"], d["dist"], action, amount if action in MOVES else "")
             memory.steps.append(step)
 
-            if action == "answer":
-                result = "answer: %s" % (d["text"] or d["see"])
-                break
             if action == "give_up":
-                result = "gave up: %s" % (d["say"] or "the goal cannot be achieved")
+                result = "gave up"
                 break
             if action == "done":
                 ok, why = self._check_done(goal)
                 if ok or memory.rejected_done >= MAX_REJECTED_DONE:
-                    result = "done: %s%s" % (d["say"] or "goal achieved", "" if ok else " (not confirmed)")
+                    result = "done%s: %s" % ("" if ok else " (not confirmed)", why)
                     break
                 memory.rejected_done += 1
                 step.outcome = "a second look disagreed: " + why
                 memory.notes.append("Note: you said done, but a second look disagreed: %s" % why)
                 self.say("      second look disagrees: %s" % why)
                 continue
-            if action == "remember":
-                step.outcome = "remembered" if self.rules.add(d["text"]) else "already known"
-            elif action == "forget":
-                removed = self.rules.remove(d["text"])
-                step.outcome = "forgot %d rule(s)" % len(removed)
-            elif action == "greet":
+            if action == "greet":
                 self.skills.greet()
             elif action == "look_around":
                 self._turn(memory, "left", amount if amount != "small" else "medium")
