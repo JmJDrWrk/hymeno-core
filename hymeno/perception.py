@@ -51,6 +51,19 @@ def model_scale(model_name, width, height):
     return w, h
 
 
+VIEW_SIZE = (32, 24)
+
+
+def view_change(jpeg_a, jpeg_b):
+    """How different two photos look, 0 (same) to 255: the mean difference of
+    tiny greyscale copies. Small after walking means the robot did not move."""
+    def tiny(jpeg):
+        with Image.open(io.BytesIO(jpeg)) as image:
+            return list(image.convert("L").resize(VIEW_SIZE).getdata())
+    a, b = tiny(jpeg_a), tiny(jpeg_b)
+    return sum(abs(x - y) for x, y in zip(a, b)) / len(a)
+
+
 def says_blocked(answer):
     """True when the last word of the answer is BLOCKED."""
     words = answer.strip().split()

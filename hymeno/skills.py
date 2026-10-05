@@ -113,13 +113,13 @@ class Skills:
 
     # ── Move ──
 
-    def _move(self, verb, vx=0.0, w=0.0, ms=500):
-        self.journal.write(verb=verb, vx=vx, w=w, ms=ms, dry_run=self.dry_run)
+    def _move(self, verb, vx=0.0, w=0.0, ms=500, vy=0.0):
+        self.journal.write(verb=verb, vx=vx, vy=vy, w=w, ms=ms, dry_run=self.dry_run)
         if self.dry_run:
             self.say("    (dry run: %s for %d ms)" % (verb, ms))
             time.sleep(ms / 1000.0)
         else:
-            self.body.move(vx=vx, w=w, duration_s=ms / 1000.0)
+            self.body.move(vx=vx, vy=vy, w=w, duration_s=ms / 1000.0)
         time.sleep(SETTLE_S)
 
     def turn(self, direction, amount="medium"):
@@ -135,6 +135,20 @@ class Skills:
         speed, ms = FORWARD_AMOUNTS[amount]
         self._move("forward", vx=speed, ms=ms)
         return Result(True, "walked forward (%s)" % amount)
+
+    def back(self, amount="small"):
+        if amount not in FORWARD_AMOUNTS:
+            return Result(False, "back needs amount small/medium/large")
+        speed, ms = FORWARD_AMOUNTS[amount]
+        self._move("back", vx=-speed, ms=ms)
+        return Result(True, "walked back (%s)" % amount)
+
+    def strafe(self, direction, amount="small"):
+        if direction not in ("left", "right") or amount not in FORWARD_AMOUNTS:
+            return Result(False, "strafe needs direction left/right and amount small/medium/large")
+        speed, ms = FORWARD_AMOUNTS[amount]
+        self._move("strafe", vy=speed if direction == "left" else -speed, ms=ms)
+        return Result(True, "stepped %s (%s)" % (direction, amount))
 
     def stop(self):
         if not self.dry_run:
@@ -296,6 +310,10 @@ VERBS = {
              "Turn on the spot."),
     "forward": ({"amount": (str, False, STEPS, "how far (default small)")},
                 "Walk forward a little."),
+    "back": ({"amount": (str, False, STEPS, "how far (default small)")}, "Walk backwards a little."),
+    "strafe": ({"direction": (str, True, SIDES, "which way to step"),
+                "amount": (str, False, STEPS, "how far (default small)")},
+               "Step sideways without turning."),
     "stop": ({}, "Stop moving."),
     "greet": ({}, "Wave hello."),
     "search": ({"target": TARGET,

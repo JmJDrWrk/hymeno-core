@@ -31,7 +31,7 @@ class FakeBody:
         self.drives = []
 
     def move(self, vx=0.0, vy=0.0, w=0.0, duration_s=0.5):
-        self.moves.append(("forward" if vx else "left" if w > 0 else "right", duration_s))
+        self.moves.append(("forward" if vx > 0 else "back" if vx < 0 else "left" if w > 0 else "right", duration_s))
 
     def stop(self):
         pass
@@ -149,36 +149,89 @@ class SkillsTest(unittest.TestCase):
         self.assertEqual([m[0] for m in body.moves], ["right"])
 
 
+class VaryingHead:
+    """A camera whose view changes a lot between photos (the robot is moving)."""
+    def __init__(self):
+        self.n = 0
+
+    def photo(self):
+        self.n += 1
+        buf = io.BytesIO()
+        Image.new("RGB", (64, 48), (self.n * 70 % 256, self.n * 130 % 256, 40)).save(buf, "JPEG")
+        return buf.getvalue()
+
+
+def decision(do, **kw):
+    d = {"see": kw.pop("see", "a room"), "objects": kw.pop("objects", []), "target": kw.pop("target", "yellow tape"),
+         "goal": kw.pop("goal", "no"), "dist": kw.pop("dist", "unknown"),
+         "free": kw.pop("free", {"left": True, "centre": True, "right": True}),
+         "do": do, "amount": kw.pop("amount", "small"), "text": kw.pop("text", ""), "say": kw.pop("say", "")}
+    d.update(kw)
+    return json.dumps(d)
+
+
 class AgentTest(unittest.TestCase):
     def setUp(self):
         import hymeno.skills as module
         module.SETTLE_S = 0
+        module.REACH_TICK_S = 0.02
 
-    def agent_with(self, decisions):
+    def agent_with(self, answers, check="yes, it is there", head=None):
         from hymeno.agent import Agent
         s, body = skills([])
-        answers = [json.dumps(d) for d in decisions]
-        s.model.ask = lambda jpeg, prompt, json_only=False, max_tokens=None: (answers.pop(0) if answers else "?", 0.1)
-        return Agent(s, say=lambda m: None), body
+        s.head = head or VaryingHead()
+        answers = list(answers)
+        def ask(jpeg, prompt, json_only=False, max_tokens=None):
+            if "believes the goal is achieved" in prompt:
+                return check, 0.1
+            return (answers.pop(0) if answers else "?"), 0.1
+        s.model.ask = ask
+        data = tempfile.mkdtemp()
+        return Agent(s, data, say=lambda m: None), body
 
-    def test_searches_turning_then_walks_and_finishes(self):
+    def test_looks_around_then_walks_and_finishes_after_a_second_look(self):
         agent, body = self.agent_with([
-            {"see": "a sofa", "goal_in_view": "no", "way_ahead": "clear", "action": "turn_left", "amount": "medium"},
-            {"see": "yellow tape", "goal_in_view": "right", "way_ahead": "clear", "action": "turn_right", "amount": "small"},
-            {"see": "yellow tape", "goal_in_view": "centre", "way_ahead": "clear", "action": "forward", "amount": "small"},
-            {"see": "yellow tape close", "goal_in_view": "centre", "goal_distance": "near", "action": "done", "say": "llegué"},
+            decision("look_around", amount="medium"),
+            decision("turn_right", goal="right"),
+            decision("forward", goal="centre", amount="small"),
+            decision("done", goal="centre", dist="near", say="llegué"),
         ])
         result = agent.run("find the yellow tape")
-        self.assertTrue(result.startswith("done"))
+        self.assertTrue(result.startswith("done"), result)
+        self.assertNotIn("not confirmed", result)
         self.assertEqual([m[0] for m in body.moves], ["left", "right", "forward"])
 
-    def test_never_walks_into_a_blocked_way(self):
+    def test_never_walks_into_floor_that_is_not_free(self):
         agent, body = self.agent_with([
-            {"see": "a wall", "goal_in_view": "centre", "way_ahead": "blocked", "action": "forward", "amount": "large"},
-            {"see": "x", "action": "give_up", "say": "no puedo"},
+            decision("forward", amount="large", free={"left": False, "centre": False, "right": True}),
+            decision("give_up"),
         ])
         self.assertTrue(agent.run("go").startswith("gave up"))
-        self.assertEqual([m[0] for m in body.moves], ["left"])
+        self.assertEqual([m[0] for m in body.moves], ["right"])
+
+    def test_done_is_checked_by_a_second_look(self):
+        agent, body = self.agent_with([decision("done"), decision("give_up")], check="no, nothing yellow here")
+        self.assertTrue(agent.run("find the tape").startswith("gave up"))
+
+    def test_backs_off_when_walking_does_not_change_the_view(self):
+        agent, body = self.agent_with([decision("forward"), decision("forward"), decision("give_up")],
+                                      head=FakeHead())
+        agent.run("go")
+        self.assertEqual([m[0] for m in body.moves], ["forward", "forward", "back", "left"])
+
+    def test_remembers_rules_and_answers_questions(self):
+        agent, body = self.agent_with([decision("remember", text="rugs are not obstacles"), decision("done")])
+        agent.run("recuerda que las alfombras no son obstáculos")
+        self.assertIn("rugs are not obstacles", agent.rules.text())
+        agent2, _ = self.agent_with([decision("answer", text="Veo un sofá.")])
+        self.assertEqual(agent2.run("¿qué ves?"), "answer: Veo un sofá.")
+
+    def test_world_memory_tracks_where_things_were_seen(self):
+        agent, body = self.agent_with([decision("turn_left", amount="large", objects=["sofa"]),
+                                       decision("give_up")])
+        agent.run("look")
+        self.assertIn("sofa", agent.world.text())
+        self.assertIn("50 degrees to the right", agent.world.text())
 
     def test_stops_after_unreadable_answers(self):
         agent, body = self.agent_with([])

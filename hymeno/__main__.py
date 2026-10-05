@@ -80,6 +80,7 @@ def direct(line):
 def help_text():
     lines = ["A goal in plain words is worked on step by step by the agent (Ctrl+C stops it).",
              "/plan goal plans it once into these verbs instead.",
+             "/rules shows the house rules it was taught; /world what it saw lately and where.",
              "/verb runs one directly: the description first, settings as name=value, e.g.",
              "  /search a large fan on the right turn_direction=left turn_step=small",
              "  /turn direction=right amount=large", ""]
@@ -105,6 +106,8 @@ def main():
     skills = Skills(head, body, model, Journal(settings["data_dir"]),
                     mirrored=settings["head"]["mirrored"], dry_run=args.dry_run, say=say)
 
+    agent = Agent(skills, settings["data_dir"], say=say)
+
     say("hymeno-core %s, model %s%s" % (__version__, model.name,
                                         " (dry run: the robot will not move)" if args.dry_run else ""))
     if not args.dry_run:
@@ -122,6 +125,12 @@ def main():
         if line == "/help":
             print(help_text())
             continue
+        if line == "/rules":
+            print(agent.rules.text())
+            continue
+        if line == "/world":
+            print(agent.world.text())
+            continue
         if line:
             try:
                 if line.startswith("/plan "):
@@ -131,7 +140,7 @@ def main():
                     skills.stop()
                 else:
                     say("goal: %s" % line)
-                    say(Agent(skills, say=say).run(line))
+                    say(agent.run(line))
             except KeyboardInterrupt:
                 say("interrupted")
             except Exception as e:   # one bad order must not end the brain
