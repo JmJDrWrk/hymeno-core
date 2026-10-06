@@ -17,16 +17,28 @@ def say(message):
 
 
 def check(settings):
+    """True when both the body and the camera answer."""
     body = Body(settings["body"]["url"], max_speed=settings["max_speed"])
     head = Head(settings["head"]["url"])
-    say("body state: %s" % body.state())
-    started = time.monotonic()
-    jpeg = head.photo()
-    path = os.path.join(settings["data_dir"], "check.jpg")
-    os.makedirs(settings["data_dir"], exist_ok=True)
-    with open(path, "wb") as f:
-        f.write(jpeg)
-    say("photo: %d KB in %.0f ms, saved as %s" % (len(jpeg) // 1024, (time.monotonic() - started) * 1000, path))
+    ok = True
+    try:
+        say("body (%s): %s" % (body.url, body.state()))
+    except Exception as e:
+        say("body (%s) does not answer: %s" % (body.url, type(e).__name__))
+        ok = False
+    try:
+        started = time.monotonic()
+        jpeg = head.photo()
+        path = os.path.join(settings["data_dir"], "check.jpg")
+        os.makedirs(settings["data_dir"], exist_ok=True)
+        with open(path, "wb") as f:
+            f.write(jpeg)
+        say("camera (%s): %d KB in %.0f ms, saved as %s" % (
+            head.url, len(jpeg) // 1024, (time.monotonic() - started) * 1000, path))
+    except Exception as e:
+        say("camera (%s) does not answer: %s" % (head.url, type(e).__name__))
+        ok = False
+    return ok
 
 
 def main():
@@ -36,8 +48,7 @@ def main():
     args = parser.parse_args()
     settings = config.load(args.config)
     say("hymeno-core %s" % __version__)
-    check(settings)
-    return 0
+    return 0 if check(settings) else 1
 
 
 if __name__ == "__main__":
