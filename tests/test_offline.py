@@ -455,6 +455,33 @@ class SeekTest(unittest.TestCase):
         self.assertTrue(body.drives)                    # it walked around looking
 
 
+class StepModeTest(unittest.TestCase):
+    def test_look_saves_the_photo_and_waits_for_enter(self):
+        import os
+        from unittest import mock
+        s, _ = skills([CENTRE])
+        s.step = True
+        with mock.patch("builtins.input", return_value="") as enter:
+            self.assertTrue(s.look("x").ok)
+        self.assertEqual(enter.call_count, 1)
+        folder = os.path.join(os.path.dirname(s.journal.path), "steps")
+        self.assertEqual(len(os.listdir(folder)), 1)
+
+    def test_background_looks_pause_in_the_driving_loop(self):
+        from unittest import mock
+        s, _ = skills([RIGHT, NEAR])
+        s.step = True
+        with mock.patch("builtins.input", return_value="") as enter:
+            self.assertTrue(s.reach("x").ok)
+        self.assertGreaterEqual(enter.call_count, 2)    # a third look may race the end
+
+    def test_off_by_default(self):
+        from unittest import mock
+        s, _ = skills([CENTRE])
+        with mock.patch("builtins.input", side_effect=AssertionError("asked for Enter")):
+            self.assertTrue(s.look("x").ok)
+
+
 class ColumnClearancesTest(unittest.TestCase):
     def test_columns_take_the_nearest_part_of_the_horizon_band(self):
         try:

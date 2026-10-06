@@ -4,9 +4,13 @@ argument, never a setting. Movements are short and always end stopped.
 Every verb returns a Result; the planner chains verbs and stops at the first
 one that fails."""
 
+import io
+import os
 import threading
 import time
 from dataclasses import dataclass
+
+from PIL import Image, ImageDraw
 
 from . import perception
 
@@ -93,6 +97,48 @@ class Skills:
         self.say = say
         self.detector = detector
         self.depth = depth
+        self.step = False          # step mode: save every analysed photo and wait for Enter
+        self._pending = None       # a pause asked for by a background look: (text, released)
+
+    # ── Step mode ──
+
+    def _checkpoint(self, jpeg, boxes, note):
+        """In step mode: saves the photo with its boxes and waits for Enter.
+        A background look hands the pause to the driving loop, which stops
+        the robot and asks, so only the main thread reads the keyboard."""
+        if not self.step:
+            return
+        text = "    saw: %s  [%s]" % (note, self._save_step(jpeg, boxes))
+        if threading.current_thread() is threading.main_thread():
+            self._wait_enter(text)
+        else:
+            released = threading.Event()
+            self._pending = (text, released)
+            released.wait()
+
+    def _wait_enter(self, text):
+        if not self.dry_run:
+            self.body.stop()
+        self.say(text)
+        input("    Enter to go on (Ctrl+C stops) ")
+
+    def _save_step(self, jpeg, boxes):
+        folder = os.path.join(os.path.dirname(self.journal.path), "steps")
+        os.makedirs(folder, exist_ok=True)
+        path = os.path.join(folder, "%s-%03d.jpg" % (time.strftime("%Y%m%d-%H%M%S"),
+                                                       int(time.time() * 1000) % 1000))
+        with Image.open(io.BytesIO(jpeg)) as image:
+            image = image.convert("RGB")
+            draw = ImageDraw.Draw(image)
+            w, h = image.size
+            for b in boxes:
+                draw.rectangle((b.x1 * w, b.y1 * h, b.x2 * w, b.y2 * h), outline=(255, 0, 0), width=3)
+                draw.text((b.x1 * w + 4, b.y1 * h + 4), b.label, fill=(255, 0, 0))
+            image.save(path, "JPEG")
+        return path
+
+    def _seen(self, target, box):
+        return "%s at the %s" % (target, self._where(self._offset(box), box)) if box else "no %s in sight" % target
 
     # ── Perceive ──
 
@@ -105,6 +151,7 @@ class Skills:
         box = max(boxes, key=lambda b: b.width * b.height) if boxes else None
         self.journal.write(verb="look", target=target, seconds=round(seconds, 2),
                            boxes=[vars(b) for b in boxes], answer=answer[:400])
+        self._checkpoint(jpeg, boxes, self._seen(target, box))
         return box, seconds
 
     def _offset(self, box):
@@ -174,6 +221,9 @@ class Skills:
         return Result(True, "stepped %s (%s)" % (direction, amount))
 
     def stop(self):
+        pending, self._pending = self._pending, None
+        if pending:                # a background look waiting for a loop that is over
+            pending[1].set()
         if not self.dry_run:
             self.body.stop()
         return Result(True, "stopped")
@@ -191,8 +241,11 @@ class Skills:
 
     def _fast_find(self, cls):
         """Biggest box of that class in a new photo, or None."""
-        boxes = [b for b in self.detector.detect(self.head.photo()) if b.label == cls]
-        return max(boxes, key=lambda b: b.width * b.height) if boxes else None
+        jpeg = self.head.photo()
+        boxes = [b for b in self.detector.detect(jpeg) if b.label == cls]
+        box = max(boxes, key=lambda b: b.width * b.height) if boxes else None
+        self._checkpoint(jpeg, boxes, self._seen(cls, box))
+        return box
 
     def find(self, target):
         """Biggest box of the target in a new photo, or None: the detector when
@@ -348,6 +401,8 @@ class Skills:
                     box = max(boxes, key=lambda b: b.width * b.height) if boxes else None
                     self.journal.write(verb="reach-look", target=target, seconds=round(seconds, 2),
                                        boxes=[vars(b) for b in boxes], blocked=blocked, answer=answer[:400])
+                    self._checkpoint(jpeg, boxes, self._seen(target, box) +
+                                     (", way blocked" if blocked else ", way clear"))
                     with lock:
                         latest["look"] = (time.monotonic(), box, blocked)
                         latest["count"] += 1
@@ -399,6 +454,14 @@ class Skills:
             self.stop()
 
     def _drive(self, vx, w):
+        pending = self._pending
+        if pending:
+            self._pending = None
+            try:
+                self._wait_enter(pending[0])
+            finally:
+                pending[1].set()
+            return
         if not self.dry_run and (vx or w):
             self.body.drive(vx=vx, w=w)
         elif not self.dry_run:
@@ -408,13 +471,18 @@ class Skills:
         """(ahead, left, right): metres of room straight ahead (its nearest
         column) and on each side (their average), from a new photo unless
         its columns are given."""
+        jpeg = None
         if columns is None:
-            columns = self.depth.clearances(self.head.photo())
+            jpeg = self.head.photo()
+            columns = self.depth.clearances(jpeg)
         if self.mirrored:
             columns = columns[::-1]
         third = len(columns) // 3
         left, centre, right = columns[:third], columns[third:len(columns) - third], columns[len(columns) - third:]
-        return min(centre), sum(left) / len(left), sum(right) / len(right)
+        ahead, left, right = min(centre), sum(left) / len(left), sum(right) / len(right)
+        if jpeg is not None:
+            self._checkpoint(jpeg, [], "room ahead %.1f m (left %.1f, right %.1f)" % (ahead, left, right))
+        return ahead, left, right
 
     def wander(self, until=None):
         """Walks wherever there is room, without a goal: straight on while the

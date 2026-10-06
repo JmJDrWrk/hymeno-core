@@ -319,6 +319,7 @@ class Agent:
             self.say("  %2d. %s | target: %s (%s) | floor L-C-R: %s -> %s%s  [%.1fs]" % (
                 n, d["see"], d["goal"], d["dist"], free, action,
                 " " + amount if action in MOVES else "", seconds))
+            self.skills._checkpoint(jpeg, [], "decision above")
 
             step = Step(d["see"], d["goal"], d["dist"], action, amount if action in MOVES else "")
             memory.steps.append(step)

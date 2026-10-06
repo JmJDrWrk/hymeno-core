@@ -93,7 +93,8 @@ def help_text():
              "/plan goal plans it once into these verbs instead.",
              "/rules shows the house rules it was taught; /world what it saw lately and where;",
              "/detect what the fast detector (YOLO) sees right now;",
-             "/depth how much room the depth eyes see in each direction.",
+             "/depth how much room the depth eyes see in each direction;",
+             "/step on|off pauses after every look (Enter goes on) and saves its photo in data/steps.",
              "/verb runs one directly: the description first, settings as name=value, e.g.",
              "  /search a large fan on the right turn_direction=left turn_step=small",
              "  /turn direction=right amount=large", ""]
@@ -153,6 +154,10 @@ def main():
                 boxes = skills.detector.detect(head.photo())
                 print("%d thing(s) in %.0f ms: %s" % (len(boxes), (time.monotonic() - started) * 1000,
                       ", ".join("%s at %.0f%%" % (b.label, b.center_x * 100) for b in boxes) or "-"))
+            continue
+        if line in ("/step on", "/step off"):
+            skills.step = line == "/step on"
+            print("step mode %s" % ("on: pauses after every look, photos in data/steps" if skills.step else "off"))
             continue
         if line == "/depth":
             if skills.depth is None:
