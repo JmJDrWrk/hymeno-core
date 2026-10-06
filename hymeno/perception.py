@@ -64,12 +64,6 @@ def view_change(jpeg_a, jpeg_b):
     return sum(abs(x - y) for x, y in zip(a, b)) / len(a)
 
 
-def says_blocked(answer):
-    """True when the last word of the answer is BLOCKED."""
-    words = answer.strip().split()
-    return bool(words) and words[-1].strip(".`*").upper() == "BLOCKED"
-
-
 def parse_boxes(answer, model_name, photo_width, photo_height):
     """The first JSON list in the answer (models like to wrap it in ``` fences)
     as boxes; anything else is ignored."""
