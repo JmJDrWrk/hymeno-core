@@ -1,6 +1,7 @@
 # Local settings and everything the brain records stay on the machine.
 config.yaml
 data/
+house_img/
 
 __pycache__/
 *.pyc

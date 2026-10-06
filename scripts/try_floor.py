@@ -1,7 +1,8 @@
 """Try SegFormer (ADE20K) as floor eyes: paints the floor it finds in green.
 
-From a folder of photos:   python scripts/try_floor.py data/steps
-From the robot's camera:   python scripts/try_floor.py --head
+From the photos in house_img/:  python scripts/try_floor.py
+From another folder:            python scripts/try_floor.py data/steps
+From the robot's camera:        python scripts/try_floor.py --head
   (takes a photo each time Enter is pressed; move the robot between photos, q to quit)
 
 Results go to data/floor-test/. Needs transformers (pip install transformers)."""
@@ -59,12 +60,10 @@ def paint(image, classes, floor_ids, labels, name):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("folder", nargs="?", help="folder of .jpg photos")
+    parser.add_argument("folder", nargs="?", default="house_img", help="folder of photos (default house_img)")
     parser.add_argument("--head", action="store_true", help="take photos from the robot's camera (config.yaml)")
     parser.add_argument("--model", default=MODEL)
     args = parser.parse_args()
-    if not args.folder and not args.head:
-        parser.error("give a folder of photos or --head")
 
     processor, model, device, labels, floor_ids = load_model(args.model)
 
@@ -83,8 +82,13 @@ def main():
             n += 1
             run(Image.open(io.BytesIO(head.photo())).convert("RGB"), "head-%02d.jpg" % n)
     else:
-        for path in sorted(glob.glob(os.path.join(args.folder, "*.jpg"))):
-            run(Image.open(path).convert("RGB"), os.path.basename(path))
+        paths = sorted(p for p in glob.glob(os.path.join(args.folder, "*"))
+                       if p.lower().endswith((".jpg", ".jpeg", ".png")))
+        if not paths:
+            sys.exit("no photos in %s/ (jpg, jpeg or png)" % args.folder)
+        for path in paths:
+            name = os.path.splitext(os.path.basename(path))[0] + ".jpg"
+            run(Image.open(path).convert("RGB"), name)
 
 
 if __name__ == "__main__":
