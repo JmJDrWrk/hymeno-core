@@ -363,98 +363,6 @@ class PlannerTest(unittest.TestCase):
             planner.plan(model, "face it")
 
 
-class FakeDepth:
-    """Sees what the script says: one list of column clearances (metres) per photo."""
-    def __init__(self, frames):
-        self.frames = list(frames)
-
-    def clearances(self, jpeg):
-        return self.frames.pop(0) if self.frames else [3.0] * 7
-
-
-OPEN = [3.0] * 7
-WALL_AHEAD_ROOM_LEFT = [2.0, 2.0, 0.3, 0.3, 0.3, 0.6, 0.6]
-WALL_AHEAD_ROOM_RIGHT = list(reversed(WALL_AHEAD_ROOM_LEFT))
-NEARLY_OPEN = [1.0] * 7
-BOXED = [0.2] * 7
-
-
-class WanderTest(unittest.TestCase):
-    def setUp(self):
-        import hymeno.skills as module
-        self.module = module
-        self.saved = module.FAST_MIN_PERIOD_S, module.WANDER_MAX_S, module.WANDER_MAX_TURN_S
-        module.FAST_MIN_PERIOD_S = 0
-
-    def tearDown(self):
-        self.module.FAST_MIN_PERIOD_S, self.module.WANDER_MAX_S, self.module.WANDER_MAX_TURN_S = self.saved
-
-    def wander(self, frames, max_s=0.05):
-        self.module.WANDER_MAX_S = max_s
-        s, body = skills([])
-        s.depth = FakeDepth(frames)
-        return s.wander(), s, body
-
-    def test_without_depth_eyes_it_does_not_move(self):
-        s, body = skills([])
-        self.assertFalse(s.wander().ok)
-        self.assertEqual(body.drives, [])
-
-    def test_walks_straight_when_open(self):
-        result, _, body = self.wander([OPEN, OPEN])
-        self.assertTrue(result.ok)
-        self.assertEqual(body.drives[0], (0.6, 0.0))
-
-    def test_turns_towards_the_roomier_side_and_walks_again(self):
-        _, _, body = self.wander([WALL_AHEAD_ROOM_LEFT, WALL_AHEAD_ROOM_LEFT, OPEN])
-        self.assertEqual(body.drives[:2], [(0.0, 0.5), (0.0, 0.5)])   # turning left
-        self.assertTrue(body.drives[2][0] > 0)                         # walking again
-        _, _, body = self.wander([WALL_AHEAD_ROOM_RIGHT])
-        self.assertEqual(body.drives[0], (0.0, -0.5))                  # turning right
-
-    def test_keeps_turning_until_there_is_enough_room(self):
-        _, _, body = self.wander([WALL_AHEAD_ROOM_RIGHT, [0.7] * 7, OPEN])
-        self.assertEqual(body.drives[1], (0.0, -0.5))   # 0.7 m is not enough to walk again
-        self.assertTrue(body.drives[2][0] > 0)
-
-    def test_slows_down_when_room_is_short(self):
-        _, _, body = self.wander([NEARLY_OPEN])
-        self.assertEqual(body.drives[0], (0.3, 0.0))
-
-    def test_mirrored_camera_swaps_the_sides(self):
-        self.module.WANDER_MAX_S = 0.05
-        s, body = skills([])
-        s.mirrored = True
-        s.depth = FakeDepth([WALL_AHEAD_ROOM_LEFT])
-        s.wander()
-        self.assertEqual(body.drives[0], (0.0, -0.5))
-
-    def test_gives_up_when_boxed_in(self):
-        self.module.WANDER_MAX_TURN_S = 0.02
-        result, _, _ = self.wander([BOXED] * 10000, max_s=5)
-        self.assertFalse(result.ok)
-        self.assertIn("boxed in", result.message)
-
-
-class SeekTest(unittest.TestCase):
-    setUp, tearDown = WanderTest.setUp, WanderTest.tearDown
-
-    def test_wanders_until_seen_then_reaches(self):
-        self.module.WANDER_MAX_S = 5
-        s, body = skills([CENTRE, NEAR])
-        s.depth = FakeDepth([])
-        result = s.seek("a rectangle of yellow tape")
-        self.assertTrue(result.ok)
-        self.assertIn("reached", result.message)
-
-    def test_fails_when_never_seen(self):
-        self.module.WANDER_MAX_S = 0.1
-        s, body = skills([])
-        s.depth = FakeDepth([])
-        self.assertFalse(s.seek("a rectangle of yellow tape").ok)
-        self.assertTrue(body.drives)                    # it walked around looking
-
-
 class StepModeTest(unittest.TestCase):
     def test_look_saves_the_photo_and_waits_for_enter(self):
         import os
@@ -480,22 +388,6 @@ class StepModeTest(unittest.TestCase):
         s, _ = skills([CENTRE])
         with mock.patch("builtins.input", side_effect=AssertionError("asked for Enter")):
             self.assertTrue(s.look("x").ok)
-
-
-class ColumnClearancesTest(unittest.TestCase):
-    def test_columns_take_the_nearest_part_of_the_horizon_band(self):
-        try:
-            import numpy as np
-        except ImportError:
-            self.skipTest("numpy not installed")
-        from hymeno.depth import column_clearances
-        depth = np.full((100, 70), 3.0)
-        depth[80:, :] = 0.2          # the floor below the band: ignored
-        depth[40:60, 0:10] = 0.4     # something near on the far left
-        columns = column_clearances(depth)
-        self.assertEqual(len(columns), 7)
-        self.assertAlmostEqual(columns[0], 0.4)
-        self.assertTrue(all(c == 3.0 for c in columns[1:]))
 
 
 if __name__ == "__main__":

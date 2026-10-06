@@ -54,15 +54,6 @@ FAST_FACE_MAX_S = 10.0
 FAST_FACE_CENTRED_FRAMES = 2
 FAST_LOST_S = 1.5              # not seen for this long: lost
 FAST_REACH_MAX_S = 60.0
-# wander: walks wherever there is room, using the depth eyes (metres, to be tuned).
-WANDER_STOP_M = 0.5            # less room than this straight ahead: turn on the spot
-WANDER_GO_M = 0.8              # while turning, walk again once this much room is ahead
-WANDER_SLOW_M = 1.2            # less room than this ahead: half speed
-WANDER_SPEED = 0.6
-WANDER_TURN = 0.5
-WANDER_STEER = 0.8             # drift towards the roomier side while walking
-WANDER_MAX_TURN_S = 25.0       # about a full turn without a way out: boxed in
-WANDER_MAX_S = 120.0
 
 
 @dataclass
@@ -86,8 +77,7 @@ def look_prompt(target):
 class Skills:
     """`say` prints progress to the user; `journal` records every look and move."""
 
-    def __init__(self, head, body, model, journal, mirrored=False, dry_run=False, say=print, detector=None,
-                 depth=None):
+    def __init__(self, head, body, model, journal, mirrored=False, dry_run=False, say=print, detector=None):
         self.head = head
         self.body = body
         self.model = model
@@ -96,7 +86,6 @@ class Skills:
         self.dry_run = dry_run
         self.say = say
         self.detector = detector
-        self.depth = depth
         self.step = False          # step mode: save every analysed photo and wait for Enter
         self._pending = None       # a pause asked for by a background look: (text, released)
 
@@ -467,84 +456,6 @@ class Skills:
         elif not self.dry_run:
             self.body.stop()
 
-    def room(self, columns=None):
-        """(ahead, left, right): metres of room straight ahead (its nearest
-        column) and on each side (their average), from a new photo unless
-        its columns are given."""
-        jpeg = None
-        if columns is None:
-            jpeg = self.head.photo()
-            columns = self.depth.clearances(jpeg)
-        if self.mirrored:
-            columns = columns[::-1]
-        third = len(columns) // 3
-        left, centre, right = columns[:third], columns[third:len(columns) - third], columns[len(columns) - third:]
-        ahead, left, right = min(centre), sum(left) / len(left), sum(right) / len(right)
-        if jpeg is not None:
-            self._checkpoint(jpeg, [], "room ahead %.1f m (left %.1f, right %.1f)" % (ahead, left, right))
-        return ahead, left, right
-
-    def wander(self, until=None):
-        """Walks wherever there is room, without a goal: straight on while the
-        way is clear, drifting towards the roomier side, and turning on the
-        spot towards it when something is close ahead. Stops after
-        WANDER_MAX_S, or when a full turn finds no way out."""
-        if self.depth is None:
-            return Result(False, "wander needs the depth eyes (pip install -r requirements-depth.txt)")
-        started = time.monotonic()
-        last_status = 0.0
-        turning, turn_started = 0, 0.0     # turning: +1 left, -1 right, 0 walking
-        try:
-            while time.monotonic() - started < WANDER_MAX_S:
-                if until is not None and until():
-                    return Result(True, "stopped wandering")
-                tick = time.monotonic()
-                ahead, left, right = self.room()
-                if turning and ahead >= WANDER_GO_M:
-                    turning = 0
-                if turning and tick - turn_started > WANDER_MAX_TURN_S:
-                    return Result(False, "boxed in: no way out after a full turn")
-                if not turning and ahead < WANDER_STOP_M:
-                    turning, turn_started = (1 if left >= right else -1), tick
-                if turning:
-                    vx, w, doing = 0.0, turning * WANDER_TURN, "turning " + ("left" if turning > 0 else "right")
-                else:
-                    vx = WANDER_SPEED if ahead >= WANDER_SLOW_M else WANDER_SPEED * 0.5
-                    w = max(-REACH_MAX_TURN, min(REACH_MAX_TURN, WANDER_STEER * (left - right) / (left + right)))
-                    doing = "walking" if vx == WANDER_SPEED else "walking slowly"
-                if tick - last_status >= FAST_STATUS_S:
-                    last_status = tick
-                    self.say("    room ahead %.1f m (left %.1f, right %.1f): %s" % (ahead, left, right, doing))
-                    self.journal.write(verb="wander-look", ahead=round(ahead, 2), left=round(left, 2),
-                                       right=round(right, 2), doing=doing)
-                self._drive(vx, w)
-                time.sleep(max(0.0, FAST_MIN_PERIOD_S - (time.monotonic() - tick)))
-            return Result(True, "wandered for %d s" % WANDER_MAX_S)
-        finally:
-            self.stop()
-
-    def seek(self, target):
-        """Wanders until the target is in sight, then reaches it."""
-        seen, done = threading.Event(), threading.Event()
-
-        def eyes():
-            while not done.is_set() and not seen.is_set():
-                try:
-                    if self.find(target) is not None:
-                        seen.set()
-                except Exception:
-                    time.sleep(1.0)
-
-        threading.Thread(target=eyes, daemon=True).start()
-        try:
-            result = self.wander(until=seen.is_set)
-        finally:
-            done.set()
-        if not seen.is_set():
-            return Result(False, "%s not found while wandering (%s)" % (target, result.message))
-        self.say("    %s in sight, going to it" % target)
-        return self.reach(target)
-
     def approach(self, target):
         """Walks towards the target, keeping it centred, and stops when it is close."""
         lost = 0
@@ -601,6 +512,4 @@ VERBS = {
                                      "close to it. It must be in sight."),
     "reach": ({"target": TARGET}, "Walk to the target without stopping, steering as it goes, and stop close "
                                   "to it or if the way is blocked. Searches by turning if it is not in sight."),
-    "wander": ({}, "Walk around wherever there is room, without a goal, avoiding obstacles."),
-    "seek": ({"target": TARGET}, "Walk around avoiding obstacles until the target is in sight, then walk to it."),
 }

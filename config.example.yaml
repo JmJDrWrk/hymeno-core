@@ -16,7 +16,6 @@ model:
   max_answer_tokens: 100             # short answers are what make looking fast
 
 # detector: false                   # switch the fast detector (YOLO) off; on when installed
-# depth: false                      # switch the depth eyes (wander) off; on when installed
 
 max_speed: 1.0                       # no walk or turn command above this (0-1); 1 = full throttle
 
