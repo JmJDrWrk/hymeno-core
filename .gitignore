@@ -1,6 +1,7 @@
 # Local settings and everything the brain records stay on the machine.
 config.yaml
-data/
+data/*
+!data/README.md
 house_img/
 CLAUDE.md
 .vscode/

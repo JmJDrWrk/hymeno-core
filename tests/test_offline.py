@@ -3,9 +3,10 @@
 import io
 import unittest
 
+import numpy as np
 from PIL import Image
 
-from hymeno import perception
+from hymeno import floor, perception
 
 
 def jpeg(colour=(0, 0, 0), width=640, height=480):
@@ -33,6 +34,128 @@ class PerceptionTest(unittest.TestCase):
     def test_view_change(self):
         self.assertEqual(perception.view_change(jpeg(), jpeg()), 0)
         self.assertGreater(perception.view_change(jpeg(), jpeg((255, 255, 255))), 200)
+
+
+
+def floor_mask(walls=(), width=640, height=480):
+    """Floor up to the horizon, except where a wall (column from, column to,
+    cm away) stops it."""
+    mask = np.zeros((height, width), bool)
+    mask[int(np.ceil(floor.HORIZON * height)):] = True
+    for x0, x1, cm in walls:
+        mask[:int(np.ceil(floor.row_of(cm) * height)), int(x0 * width):int(x1 * width)] = False
+    return mask
+
+
+def decide(walls=(), last=None):
+    return floor.decide(floor.free_distances(floor_mask(walls)), last)
+
+
+class FloorTest(unittest.TestCase):
+    def test_open_floor_goes_straight_on(self):
+        d = decide()
+        self.assertEqual(d["direction"], "ahead")
+        self.assertEqual(d["clear_cm"], floor.FAR_CM)
+
+    def test_wall_close_is_blocked(self):
+        self.assertEqual(decide([(0, 1, 15)])["direction"], "blocked")
+
+    def test_a_thin_post_ahead_is_avoided(self):
+        d = decide([(0.50, 0.55, 25)])
+        self.assertIn(d["direction"], ("left", "right"))
+        self.assertGreater(d["clear_cm"], floor.STOP_CM)
+
+    def test_goes_through_a_wide_opening(self):
+        d = decide([(0, 0.55, 20), (0.95, 1, 20)])
+        self.assertEqual(d["direction"], "right")
+
+    def test_does_not_try_a_narrow_opening(self):
+        self.assertEqual(decide([(0, 0.65, 20), (0.85, 1, 20)])["direction"], "blocked")
+
+    def test_a_door_of_the_floor_colour_does_not_fool_it(self):
+        mask = floor_mask([(0, 1, 30)])
+        mask[int(0.3 * mask.shape[0]):, int(0.4 * mask.shape[1]):int(0.6 * mask.shape[1])] = True
+        d = floor.decide(floor.free_distances(mask))
+        self.assertLess(d["ahead_cm"], 31)
+
+    def test_keeps_turning_the_same_way_while_blocked(self):
+        last = {"direction": "blocked", "steer": 1.0, "heading": floor.CENTRE}
+        self.assertEqual(decide([(0, 1, 15)], last)["steer"], 1.0)
+
+
+
+def photo(direction="ahead", steer=0.0):
+    return {"direction": direction, "steer": steer, "heading": floor.CENTRE + steer * 0.4}
+
+
+class GroupTest(unittest.TestCase):
+    """With groups of 3, whatever floor.GROUP is set to."""
+
+    def setUp(self):
+        self.saved = floor.GROUP, floor.MAJORITY
+        floor.GROUP, floor.MAJORITY = 3, 2
+
+    def tearDown(self):
+        floor.GROUP, floor.MAJORITY = self.saved
+
+    def test_keys_go_by_threes(self):
+        self.assertEqual([floor.group_of(n) for n in (1, 3, 4, 9)], ["000001", "000001", "000002", "000003"])
+
+    def test_two_blocked_turn_on_the_spot(self):
+        order = floor.combine([photo("blocked", 1.0), photo("blocked", 1.0), photo()])
+        self.assertEqual((order["direction"], order["steer"]), ("blocked", 1.0))
+
+    def test_one_blocked_waits(self):
+        self.assertEqual(floor.combine([photo("blocked", -1.0), photo(), photo()])["direction"], "wait")
+
+    def test_too_different_waits(self):
+        self.assertEqual(floor.combine([photo("left", -0.5), photo(), photo("right", 0.5)])["direction"], "wait")
+
+    def test_walks_with_the_median_steer(self):
+        order = floor.combine([photo("right", 0.3), photo(), photo("right", 0.2)])
+        self.assertEqual((order["direction"], order["steer"]), ("right", 0.2))
+
+    def test_an_order_once_the_group_is_complete(self):
+        groups = floor.Groups()
+        self.assertEqual(groups.add(1, photo()), ("000001", None))
+        self.assertEqual(groups.add(2, photo()), ("000001", None))
+        self.assertEqual(groups.add(3, photo())[1]["direction"], "ahead")
+
+    def test_two_blocked_stop_without_waiting_for_the_third(self):
+        groups = floor.Groups()
+        groups.add(4, photo("blocked", -1.0))
+        self.assertEqual(groups.add(5, photo("blocked", -1.0))[1]["direction"], "blocked")
+
+    def test_a_group_is_carried_out_once(self):
+        groups = floor.Groups()
+        groups.add(4, photo("blocked", -1.0))
+        groups.add(5, photo("blocked", -1.0))
+        self.assertTrue(groups.fresh)
+        self.assertEqual(groups.add(6, photo())[1]["direction"], "blocked")
+        self.assertFalse(groups.fresh)
+
+
+
+class CalibrateTest(unittest.TestCase):
+    def test_clicks_give_back_the_geometry(self):
+        from hymeno.calibrate import solve
+        horizon, centre, cm_k, half_width, w, h = 0.45, 0.52, 2.4, 1.15, 640, 480
+
+        def tape(side, row):
+            return ((centre + side * half_width * (row - horizon)) * w, row * h)
+
+        def screw(cm):
+            return (centre * w, (horizon + cm_k / cm) * h)
+
+        got = solve([tape(-1, 0.9), tape(-1, 0.55), tape(1, 0.9), tape(1, 0.55), screw(25), screw(50)], w, h)
+        for key, value in (("horizon", horizon), ("centre", centre), ("cm_k", cm_k), ("half_width", half_width)):
+            self.assertAlmostEqual(got[key], value, places=6)
+        self.assertEqual(got["warnings"], [])
+
+    def test_parallel_tapes_make_no_sense(self):
+        from hymeno.calibrate import solve
+        with self.assertRaises(ValueError):
+            solve([(100, 400), (100, 300), (500, 400), (500, 300), (300, 350), (300, 300)], 640, 480)
 
 
 if __name__ == "__main__":

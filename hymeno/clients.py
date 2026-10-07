@@ -2,7 +2,10 @@
 body and the vision model server. Each is just a URL."""
 
 import base64
+import threading
 import time
+
+from urllib.parse import urlsplit
 
 import requests
 
@@ -20,6 +23,57 @@ class Head:
         if not r.content.startswith(b"\xff\xd8"):
             raise RuntimeError("the head did not send a JPEG")
         return r.content
+
+
+class HeadVideo:
+    """The camera's video (MJPEG on port 81, /stream). A background thread
+    keeps only the newest frame, so each photo() is fresh and never a backlog.
+    The head serves one video client at a time: a browser watching it stops this."""
+
+    def __init__(self, url, timeout_s=10):
+        parts = urlsplit(url)
+        self.url = "%s://%s:81/stream" % (parts.scheme, parts.hostname)
+        self.timeout_s = timeout_s
+        self._frame, self._number, self._error = None, 0, None
+        self._new = threading.Condition()
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def _publish(self, frame=None, error=None):
+        with self._new:
+            if frame:
+                self._frame, self._number = frame, self._number + 1
+            self._error = error
+            self._new.notify_all()
+
+    def _run(self):
+        while True:
+            try:
+                with requests.get(self.url, stream=True, timeout=self.timeout_s) as r:
+                    r.raise_for_status()
+                    buf = b""
+                    for chunk in r.iter_content(16384):
+                        buf += chunk
+                        while True:  # cut out each JPEG, start to end marker
+                            start = buf.find(b"\xff\xd8")
+                            if start < 0:
+                                buf = buf[-1:]
+                                break
+                            end = buf.find(b"\xff\xd9", start + 2)
+                            if end < 0:
+                                buf = buf[start:]
+                                break
+                            self._publish(buf[start:end + 2])
+                            buf = buf[end + 2:]
+            except Exception as e:
+                self._publish(error=e)
+                time.sleep(1)
+
+    def photo(self, after=0):
+        """(JPEG, number) of the first frame newer than frame number `after`."""
+        with self._new:
+            if not self._new.wait_for(lambda: self._number > after, self.timeout_s):
+                raise RuntimeError("no video from the head (%s)" % (type(self._error).__name__ if self._error else "timeout"))
+            return self._frame, self._number
 
 
 class Body:
