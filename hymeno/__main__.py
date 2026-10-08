@@ -6,7 +6,9 @@
     python -m hymeno explore --speed 0.2 # walk where the floor is free, Ctrl+C stops
     python -m hymeno explore --every 2   # one decision, then 2 s walking it, and stop
     python -m hymeno explore --record    # the same, keeping every photo in data/runs/<date-time>/
+    python -m hymeno explore --goal "shoe"       # find it (YOLO-World, short names) and walk there
     python -m hymeno replay data/runs/<date-time> --from 120 --to 300 --step
+    python -m hymeno replay data/runs/<date-time> --step --select data/goals   # s copies a photo there
                                          # decide again on recorded photos, without the robot
     python -m hymeno calibrate           # click the tapes and screws on a photo: camera geometry
 """
@@ -22,8 +24,15 @@ from . import __version__, config
 from .clients import Body, Head, HeadVideo
 
 
+LOG = None  # while recording, everything said also goes to log.txt in the run
+
+
 def say(message):
-    print(time.strftime("%H:%M:%S"), message, flush=True)
+    line = "%s %s" % (time.strftime("%H:%M:%S"), message)
+    print(line, flush=True)
+    if LOG:
+        LOG.write(line + "\n")
+        LOG.flush()
 
 
 def describe(decision):
@@ -60,14 +69,32 @@ def check(settings):
     return ok
 
 
-def floor(settings, every=None, speed=None, record=False):
+def searching_view(image, frame, note):
+    """The photo with only the searching state written on it."""
+    from PIL import ImageDraw
+
+    from .floor import write
+
+    picture = image.copy()
+    pen = ImageDraw.Draw(picture)
+    write(pen, (8, 6), "SEARCHING", size=26)
+    write(pen, (8, 42), note)
+    write(pen, (picture.width - 8, 6), "frame %d" % frame, right=True)
+    return picture
+
+
+def floor(settings, every=None, speed=None, record=False, what=None, fastest=False):
     """One photo from the head (or one every `every` seconds until Ctrl+C,
     from its video), saved with the floor in green and an arrow. With a
     speed, the robot also walks that way (explore). With record, each photo
-    of the loop is kept in data/runs/<date-time>/, numbered, for replay."""
+    of the loop is kept in data/runs/<date-time>/, numbered, for replay.
+    With `what` (words), the vision model finds it and the robot walks there:
+    standing (turning a little) until it is first seen, stopping on arrival.
+    With fastest (loops only), no picture is drawn or saved (no view, no
+    latest.jpg): to measure what that costs, and to run as fast as it can."""
     from PIL import Image, ImageOps
 
-    from .floor import Floor, Groups, draw
+    from .floor import Floor, Goal, Groups, draw
 
     head = Head(settings["head"]["url"])
     say("loading the floor model...")
@@ -77,16 +104,26 @@ def floor(settings, every=None, speed=None, record=False):
     video = HeadVideo(settings["head"]["url"]) if every is not None else None
     groups = Groups() if every is not None else None
     body = Body(settings["body"]["url"], max_speed=settings["max_speed"]) if speed else None
-    view = None
-    if every is not None:
+    view, goal, wanted = None, None, None
+    if what and body:
+        from .target import DETECTOR, SEARCH_TURN_S, DetectedTarget
+        wanted = DetectedTarget(what)
+        say("looking for %s with %s" % (what, DETECTOR))
+    fastest = fastest and every is not None
+    if every is not None and not fastest:
         from .view import View
-        view = View()
+        if not wanted:
+            goal = Goal()  # clicked on the view; followed while it is seen
+        view = View(on_goal=(lambda column: goal.set(column) if column is not None else goal.clear("goal cleared"))
+                    if goal else None)
         say("watch it on http://localhost:%d" % view.server.server_port)
     run, frame = None, 0
     if record and every is not None:
         run = os.path.join(settings["data_dir"], "runs", time.strftime("%Y%m%d-%H%M%S"))
         os.makedirs(run)
-        say("recording to %s" % run)
+        global LOG
+        LOG = open(os.path.join(run, "log.txt"), "a")
+        say("recording to %s (photos and log.txt)" % run)
     decision, number = None, 0
     try:
         while True:
@@ -112,28 +149,57 @@ def floor(settings, every=None, speed=None, record=False):
             if settings["head"]["mirrored"]:
                 image = ImageOps.mirror(image)
             started = time.monotonic()
-            # Each photo decides on its own; its group decides what is carried out.
-            mask, decision = eyes.look(image, groups.acting if groups else None)
-            key, order = groups.add(frame, decision) if groups else (None, None)
-            note = group_note(key, order) if groups else None
-            # One fixed name in a loop, to keep it open while the robot moves.
-            name = "latest" if every is not None else time.strftime("%Y%m%d-%H%M%S")
-            path = os.path.join(folder, name + ".jpg")
-            drawn = io.BytesIO()
-            draw(image, mask, decision, "frame %d" % frame if groups else None, note).save(drawn, "JPEG")
-            if view:
-                view.show(drawn.getvalue())
-            for data, target in ((drawn.getvalue(), path), (jpeg, os.path.join(folder, name + "-raw.jpg"))):
-                with open(target + ".tmp", "wb") as f:
-                    f.write(data)
-                os.replace(target + ".tmp", target)
+            if wanted:
+                wanted.offer(jpeg, image, frame)
+                todo = wanted.check(frame)
+            # While searching a goal in words the robot stands: no floor to look at,
+            # which leaves the GPU to the vision model.
+            searching = wanted is not None and wanted.state == "searching"
+            if searching:
+                mask, decision, order, note = None, None, None, wanted.note
+            else:
+                # Each photo decides on its own; its group decides what is carried out.
+                mask, decision = eyes.look(image, groups.acting if groups else None, wanted or goal)
+                if wanted:
+                    decision["target"] = wanted.drawing()
+                key, order = groups.add(frame, decision) if groups else (None, None)
+                note = group_note(key, order) if groups else None
+                if goal and goal.note != "no goal":
+                    note += " | " + goal.note
+                if wanted:
+                    note += " | " + wanted.note
+            if not fastest:
+                # One fixed name in a loop, to keep it open while the robot moves.
+                name = "latest" if every is not None else time.strftime("%Y%m%d-%H%M%S")
+                path = os.path.join(folder, name + ".jpg")
+                drawn = io.BytesIO()
+                if searching:
+                    searching_view(image, frame, note).save(drawn, "JPEG")
+                else:
+                    draw(image, mask, decision, "frame %d" % frame if groups else None, note).save(drawn, "JPEG")
+                if view:
+                    view.show(drawn.getvalue())
+                for data, target in ((drawn.getvalue(), path), (jpeg, os.path.join(folder, name + "-raw.jpg"))):
+                    with open(target + ".tmp", "wb") as f:
+                        f.write(data)
+                    os.replace(target + ".tmp", target)
             say("%s%s%s (photo %.0f ms, floor %.0f ms)" % (
-                "frame %d: " % frame if groups else "", describe(decision),
+                "frame %d: " % frame if groups else "", describe(decision) if decision else "standing",
                 " | " + note if note else "", (started - asked) * 1000, (time.monotonic() - started) * 1000))
             if every is None:
                 return True
             if not body:
                 time.sleep(every)
+            elif wanted and todo != "go":  # a goal in words, not being walked to now
+                if todo == "turn":  # searching: turn a little, then ask again
+                    body.move(w=speed, duration_s=SEARCH_TURN_S)
+                    _, number = video.photo(number)  # skip the frame taken while turning
+                elif todo in ("arrived", "gave up"):
+                    body.stop()
+                    say("%s: %s" % (todo, what))
+                    return todo == "arrived"
+                else:
+                    body.stop()
             elif order and groups.fresh:  # a group just decided: carry its order out once
                 # (while it is pending, keep doing the last)
                 vx = speed if order["direction"] in ("ahead", "left", "right") else 0  # blocked: turn on the spot
@@ -170,12 +236,18 @@ def read_key():
         termios.tcsetattr(fd, termios.TCSADRAIN, old)
 
 
-def choose_frame(i, last, index_of):
-    """Right arrow: next frame; left: the one before; a number and Enter: that frame."""
-    print("  -> next, <- back, a number + Enter: go to that frame (Ctrl+C stops) ", end="", flush=True)
+def choose_frame(i, last, index_of, select=None):
+    """Right arrow: next frame; left: the one before; a number and Enter: that
+    frame. With select (a function of the frame index): s selects or unselects."""
+    prompt = "  -> next, <- back, a number + Enter: go to that frame%s (Ctrl+C stops) " % (
+        ", s: select" if select else "")
+    print(prompt, end="", flush=True)
     typed = ""
     while True:
         key = read_key()
+        if key == "s" and select and not typed:
+            print("\n  " + select(i) + "\n" + prompt, end="", flush=True)
+            continue
         if key == "right":
             if i >= last:
                 print("\n  that was the last frame", end="", flush=True)
@@ -201,7 +273,7 @@ def choose_frame(i, last, index_of):
 WARM_UP = 5  # photos decided silently before a jump, so its groups start as they did
 
 
-def replay(settings, folder, start=None, end=None, every=0, step=False):
+def replay(settings, folder, start=None, end=None, every=0, step=False, select_to=None):
     """Decides again on the photos recorded in folder (from --record), shown
     on the view and the console with their frame numbers. No robot needed.
     With step: Enter goes on, "b" goes back and a number jumps to that frame.
@@ -229,6 +301,7 @@ def replay(settings, folder, start=None, end=None, every=0, step=False):
     view = View()
     say("watch it on http://localhost:%d" % view.server.server_port)
     shown = {}  # frame index -> (drawn JPEG, console line)
+    timing = {"decide": [], "draw": []}  # seconds per photo, for the summary at the end
     state = {"groups": None, "at": None}  # the running sequence and its last index
 
     def decide_up_to(i):
@@ -245,14 +318,31 @@ def replay(settings, folder, start=None, end=None, every=0, step=False):
             if settings["head"]["mirrored"]:
                 image = ImageOps.mirror(image)
             groups = state["groups"]
+            started = time.monotonic()
             mask, decision = eyes.look(image, groups.acting)
             key, order = groups.add(frame, decision)
+            decided = time.monotonic()
             if k >= warm:
                 drawn = io.BytesIO()
                 note = group_note(key, order)
                 draw(image, mask, decision, "frame %d" % frame, note).save(drawn, "JPEG")
-                shown[k] = (drawn.getvalue(), "frame %d: %s | %s" % (frame, describe(decision), note))
+                drew = time.monotonic()
+                timing["decide"].append(decided - started)
+                timing["draw"].append(drew - decided)
+                shown[k] = (drawn.getvalue(), "frame %d: %s | %s (decide %.0f ms, draw %.0f ms)" % (
+                    frame, describe(decision), note, (decided - started) * 1000, (drew - decided) * 1000))
         state["at"] = i
+
+    def select(k):
+        """Copies photo k to select_to, or takes the copy away if it is there."""
+        import shutil
+        copy = os.path.join(select_to, os.path.basename(frames[k][1]))
+        if os.path.exists(copy):
+            os.remove(copy)
+            return "frame %d unselected (removed from %s)" % (frames[k][0], select_to)
+        os.makedirs(select_to, exist_ok=True)
+        shutil.copy2(frames[k][1], copy)
+        return "frame %d selected (copied to %s)" % (frames[k][0], select_to)
 
     i = index_of(numbers[0] if start is None else start)
     last = len(frames) - 1 if end is None else bisect.bisect_right(numbers, end) - 1
@@ -261,9 +351,11 @@ def replay(settings, folder, start=None, end=None, every=0, step=False):
             decide_up_to(i)
             jpeg, line = shown[i]
             view.show(jpeg)
+            if select_to and os.path.exists(os.path.join(select_to, os.path.basename(frames[i][1]))):
+                line += " | SELECTED"
             say(line)
             if step:
-                i = choose_frame(i, last, index_of)
+                i = choose_frame(i, last, index_of, select if select_to else None)
                 continue
             if every:
                 time.sleep(every)
@@ -273,6 +365,9 @@ def replay(settings, folder, start=None, end=None, every=0, step=False):
             i += 1
     except (KeyboardInterrupt, EOFError):
         say("stopped")
+    if timing["decide"]:
+        decide, drawing = (sum(timing[k]) / len(timing[k]) * 1000 for k in ("decide", "draw"))
+        say("%d photos: decide %.0f ms, draw %.0f ms a photo on average" % (len(timing["decide"]), decide, drawing))
     return True
 
 
@@ -309,22 +404,28 @@ def main():
                         "explore: walk each decision this many seconds, then stop")
     parser.add_argument("--speed", type=float, default=0.2, help="explore: walking speed, 0..1 (capped by max_speed)")
     parser.add_argument("--record", action="store_true", help="floor --every, explore: keep every photo for replay")
+    parser.add_argument("--fastest", action="store_true",
+                        help="floor --every, explore: draw and save no picture (no view, no latest.jpg)")
+    parser.add_argument("--goal", help='explore: walk to this, found by the detector; short names work best (e.g. "shoe")')
     parser.add_argument("--from", dest="start", type=int, help="replay: first frame")
     parser.add_argument("--to", dest="end", type=int, help="replay: last frame")
     parser.add_argument("--step", action="store_true", help="replay: one frame at a time (arrows: next/back, a number + Enter: go there)")
+    parser.add_argument("--select", "--moveselected", dest="select_to", metavar="FOLDER",
+                        help="replay --step: s copies the photo shown to this folder (s again takes it away)")
     args = parser.parse_args()
     settings = config.load(args.config)
     say("hymeno-core %s" % __version__)
     if args.command == "floor":
-        return 0 if floor(settings, args.every, record=args.record) else 1
+        return 0 if floor(settings, args.every, record=args.record, fastest=args.fastest) else 1
     if args.command == "explore":
-        return 0 if floor(settings, every=args.every or 0, speed=args.speed, record=args.record) else 1
+        return 0 if floor(settings, every=args.every or 0, speed=args.speed, record=args.record, what=args.goal,
+                          fastest=args.fastest) else 1
     if args.command == "calibrate":
         return 0 if calibrate(settings, args.folder) else 1
     if args.command == "replay":
         if not args.folder:
             parser.error("replay needs a folder: data/runs/<date-time>")
-        return 0 if replay(settings, args.folder, args.start, args.end, args.every or 0, args.step) else 1
+        return 0 if replay(settings, args.folder, args.start, args.end, args.every or 0, args.step, args.select_to) else 1
     return 0 if check(settings) else 1
 
 

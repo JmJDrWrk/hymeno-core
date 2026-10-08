@@ -9,3 +9,9 @@ CLAUDE.md
 __pycache__/
 *.pyc
 .venv/
+
+# Model weights downloaded by ultralytics (detectors and their text models).
+*.pt
+*.ts
+*.part
+weights/

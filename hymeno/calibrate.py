@@ -4,7 +4,9 @@ Two tapes on the floor, one robot-width apart and 1 m long from the front
 legs, with screws at 25 and 50 cm. On a photo of them, in the browser, the
 user clicks two points on each tape and the base of each screw. From those:
 the horizon and centre (where the tapes meet), cm per row (the screws) and the
-robot's width (the tapes). Saved to floor.CALIBRATION, which floor.py loads."""
+robot's width (the tapes). Also the leg corners: the bottom corners where the
+robot's own legs show, set with two sliders. Each part is saved on its own to
+floor.CALIBRATION, which floor.py loads."""
 
 import json
 import os
@@ -57,8 +59,15 @@ PAGE = """<html><head><title>hymeno calibrate</title></head>
 <canvas id="c" style="width:100%;max-width:960px;cursor:crosshair"></canvas>
 <div style="padding:8px 14px;max-width:960px">
 <div style="margin:10px 0"><b id="step" style="color:#ff0"></b>
- <button id="undo">Undo</button> <button id="save" disabled>Save</button>
+ <button id="undo">Undo</button> <button id="save" disabled>Save geometry</button>
  <div id="result" style="margin-top:6px;color:#9cf"></div></div>
+<div style="margin:10px 0;padding:6px 8px;border:1px solid #444">
+ <b style="color:#fd0">Leg corners</b>
+ <label><input type="checkbox" id="legs"> ignore them</label>
+ &nbsp; in <input type="range" id="legin" min="0" max="0.5" step="0.01">
+ &nbsp; up <input type="range" id="legup" min="0" max="0.8" step="0.01">
+ <span id="legvalues"></span> <button id="savelegs">Save leg corners</button>
+ <div id="legresult" style="margin-top:6px;color:#9cf"></div></div>
 
 <h2 style="margin:4px 0">Camera calibration</h2>
 <p style="margin:4px 0;color:#bbb">Tells the robot how its camera sees the floor: where the horizon is, how many
@@ -80,8 +89,19 @@ data/calibration.jpg). If the tapes or screws don't show well: Ctrl+C in the ter
 <li>The <span style="color:#0ff">cyan lines</span> (the robot's path) must lie <b>on the tapes</b>.</li>
 <li>The <span style="color:#f66">red 25 cm and 50 cm lines</span> must cross <b>the base of their screws</b>.</li>
 <li>"Screws read as" should say about 25 and 50 cm. A WARNING means a click is probably off: Undo and redo it.</li>
-<li><b>Save</b> writes data/calibration.json. Then start floor, explore or replay again to use it.
-To go back to the numbers in the code, delete that file.</li>
+<li><b>Save geometry</b> writes it to data/calibration.json. Then start floor, explore or replay again
+to use it. To go back to the numbers in the code, delete that file.</li>
+</ul>
+<p style="margin:8px 0 2px"><b>4. Leg corners</b> (optional, can be done on its own)</p>
+<ul style="margin:2px 0">
+<li>The robot's own legs show in the bottom corners of the photo. Inside the
+<span style="color:#fd0">yellow corners</span> nothing counts as an obstacle.</li>
+<li>Move <b>in</b> (how far they reach along the bottom) and <b>up</b> (how far up the sides) until the
+yellow covers the legs with a little margin. Untick "ignore them" if the legs never show.</li>
+<li>The legs move while walking, so use a photo where they show the most. No tapes are needed for this
+part: <code>python -m hymeno calibrate data/runs/&lt;date-time&gt;/00123.jpg</code></li>
+<li><b>Save leg corners</b> saves only them; the geometry already saved is kept (and the other way round).</li>
+<li>When you are done, Ctrl+C in the terminal.</li>
 </ul>
 
 </div>
@@ -95,6 +115,16 @@ const STEPS = ["Left tape, near: the middle of the left tape, low in the photo (
 const canvas = document.getElementById('c'), pen = canvas.getContext('2d');
 const photo = new Image();
 let points = [], solved = null;
+const legs = document.getElementById('legs'), legIn = document.getElementById('legin'),
+  legUp = document.getElementById('legup');
+fetch('/legs').then(r => r.json()).then(d => {
+  legs.checked = d.legs; legIn.value = d.leg_in; legUp.value = d.leg_up; redraw();
+});
+[legs, legIn, legUp].forEach(control => control.oninput = redraw);
+function triangle(points, colour) {
+  pen.fillStyle = colour; pen.beginPath(); pen.moveTo(...points[0]);
+  points.slice(1).forEach(p => pen.lineTo(...p)); pen.closePath(); pen.fill();
+}
 photo.onload = () => { canvas.width = photo.width; canvas.height = photo.height; redraw(); };
 photo.src = '/photo.jpg';
 function line(x1, y1, x2, y2, colour, wide) {
@@ -109,6 +139,12 @@ function label(text, x, y) {
 function redraw() {
   const W = canvas.width, H = canvas.height;
   pen.drawImage(photo, 0, 0);
+  const i = +legIn.value, u = +legUp.value;
+  document.getElementById('legvalues').textContent = 'in ' + i.toFixed(2) + ', up ' + u.toFixed(2);
+  if (legs.checked) {
+    triangle([[0, H], [i * W, H], [0, H * (1 - u)]], 'rgba(255, 220, 0, 0.45)');
+    triangle([[W, H], [W - i * W, H], [W, H * (1 - u)]], 'rgba(255, 220, 0, 0.45)');
+  }
   points.forEach((p, i) => {
     pen.fillStyle = i < 4 ? '#ff0' : '#f0f';
     pen.beginPath(); pen.arc(p[0], p[1], 5, 0, 7); pen.fill();
@@ -154,6 +190,11 @@ canvas.onclick = async e => {
 document.getElementById('undo').onclick = () => {
   points.pop(); solved = null; document.getElementById('result').textContent = ''; redraw();
 };
+document.getElementById('savelegs').onclick = async () => {
+  const answer = await fetch('/save-legs', {method: 'POST',
+    body: JSON.stringify({legs: legs.checked, leg_in: +legIn.value, leg_up: +legUp.value})});
+  document.getElementById('legresult').textContent = await answer.text();
+};
 document.getElementById('save').onclick = async () => {
   const answer = await fetch('/save', {method: 'POST', body: JSON.stringify(solved)});
   document.getElementById('result').textContent = await answer.text();
@@ -161,8 +202,20 @@ document.getElementById('save').onclick = async () => {
 </script></body></html>"""
 
 
+def save(path, update):
+    """Merges update into the calibration file, keeping what is not updated."""
+    kept = {}
+    if os.path.exists(path):
+        with open(path) as f:
+            kept = json.load(f)
+    kept.update(update)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(kept, f, indent=2)
+
+
 def run(jpeg, photo_path, say, port):
-    """Serves the clicking page until the calibration is saved (or Ctrl+C)."""
+    """Serves the calibration page until Ctrl+C. True if anything was saved."""
     from . import floor
 
     saved = threading.Event()
@@ -181,36 +234,45 @@ def run(jpeg, photo_path, say, port):
         def do_GET(self):
             if self.path == "/photo.jpg":
                 self.reply(200, jpeg, "image/jpeg")
+            elif self.path == "/legs":
+                now = {"legs": floor.LEGS, "leg_in": floor.LEG_IN, "leg_up": floor.LEG_UP}
+                self.reply(200, json.dumps(now).encode(), "application/json")
             else:
                 self.reply(200, PAGE.encode(), "text/html")
 
         def do_POST(self):
             data = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            when = time.strftime("%Y-%m-%d %H:%M")
             if self.path == "/solve":
                 try:
                     answer = solve(data["points"], data["width"], data["height"])
                 except ValueError as e:
                     answer = {"error": str(e)}
                 self.reply(200, json.dumps(answer).encode(), "application/json")
-            elif self.path == "/save":
-                keep = {k: data[k] for k in ("horizon", "centre", "cm_k", "half_width")}
-                keep.update(measured=time.strftime("%Y-%m-%d %H:%M"), photo=photo_path)
-                os.makedirs(os.path.dirname(floor.CALIBRATION), exist_ok=True)
-                with open(floor.CALIBRATION, "w") as f:
-                    json.dump(keep, f, indent=2)
-                self.reply(200, ("Saved to %s. Restart hymeno to use it." % floor.CALIBRATION).encode(), "text/plain")
-                say("calibration saved to %s: %s" % (floor.CALIBRATION, json.dumps(keep)))
-                saved.set()
+                return
+            if self.path == "/save":
+                update = {k: data[k] for k in ("horizon", "centre", "cm_k", "half_width")}
+                update.update(measured=when, photo=photo_path)
+            elif self.path == "/save-legs":
+                update = {"legs": bool(data["legs"]), "leg_in": float(data["leg_in"]),
+                          "leg_up": float(data["leg_up"]), "legs_measured": when, "legs_photo": photo_path}
+            else:
+                self.reply(404, b"", "text/plain")
+                return
+            save(floor.CALIBRATION, update)
+            self.reply(200, ("Saved to %s. Restart floor, explore or replay to use it." % floor.CALIBRATION).encode(),
+                       "text/plain")
+            say("saved to %s: %s" % (floor.CALIBRATION, json.dumps(update)))
+            saved.set()
 
     server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
     server.daemon_threads = True
     threading.Thread(target=server.serve_forever, daemon=True).start()
-    say("click the points on http://localhost:%d (Ctrl+C quits without saving)" % port)
+    say("calibrate on http://localhost:%d; Ctrl+C when you are done" % port)
     try:
-        while not saved.wait(0.5):
-            pass
-        time.sleep(1)  # let the page get its answer
+        while True:
+            time.sleep(0.5)
     except KeyboardInterrupt:
-        say("stopped, nothing saved")
+        say("done" if saved.is_set() else "stopped, nothing saved")
     server.shutdown()
     return saved.is_set()
